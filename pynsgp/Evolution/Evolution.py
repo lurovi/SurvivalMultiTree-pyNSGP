@@ -14,10 +14,13 @@ class pyNSGP:
 		fitness_function,
 		functions,
 		terminals,
+		crossovers,
+		mutations,
+		coeff_opts,
 		pop_size=500,
-		crossover_rate=0.9,
-		mutation_rate=0.1,
-		op_mutation_rate=1.0,
+		prob_delete_tree=0.05,
+		prob_init_tree=0.1,
+		prob_mt_crossover=0.8,
 		max_evaluations=-1,
 		max_generations=-1,
 		max_time=-1,
@@ -26,16 +29,22 @@ class pyNSGP:
 		max_tree_size=100,
 		tournament_size=4,
 		penalize_duplicates=True,
-		verbose=False
+		verbose=False,
+		partition_features=False,
+		min_trees_init=1,
+		max_trees_init=5
 		):
 
 		self.pop_size = pop_size
 		self.fitness_function = fitness_function
 		self.functions = functions
 		self.terminals = terminals
-		self.crossover_rate = crossover_rate
-		self.mutation_rate = mutation_rate
-		self.op_mutation_rate = op_mutation_rate
+		self.crossovers = crossovers
+		self.mutations = mutations
+		self.coeff_opts = coeff_opts
+		self.prob_delete_tree = prob_delete_tree
+		self.prob_init_tree = prob_init_tree
+		self.prob_mt_crossover = prob_mt_crossover
 
 		self.max_evaluations = max_evaluations
 		self.max_generations = max_generations
@@ -50,7 +59,11 @@ class pyNSGP:
 		self.generations = 0
 
 		self.verbose = verbose
-
+		
+		self.partition_features = partition_features
+		self.min_trees_init = min_trees_init
+		self.max_trees_init = max_trees_init
+	
 
 	def __ShouldTerminate(self):
 		must_terminate = False
@@ -64,7 +77,7 @@ class pyNSGP:
 
 		if must_terminate and self.verbose:
 			print('Terminating at\n\t', 
-				self.generations, 'generations\n\t', self.fitness_function.evaluations, 'evaluations\n\t', np.round(elapsed_time,2), 'seconds')
+				self.generations, 'generations\n\t', self.fitness_function.evaluations, 'evaluations\n\t', np.round(elapsed_time,4), 'seconds')
 
 		return must_terminate
 
@@ -85,8 +98,11 @@ class pyNSGP:
 				next_depth_interval += init_depth_interval
 				curr_max_depth += 1
 
-			t = Variation.GenerateRandomTree( self.functions, self.terminals, curr_max_depth, curr_height=0, 
-				method='grow' if np.random.random() < 0.5 else 'full', min_depth=self.min_depth )
+			t = Variation.GenerateRandomMultitree(self.functions, self.terminals, max_depth=curr_max_depth,
+													partition_features=self.partition_features,
+													min_trees_init=self.min_trees_init,
+													max_trees_init=self.max_trees_init
+												)
 			self.fitness_function.Evaluate( t )
 			self.population.append( t )
 
@@ -99,15 +115,29 @@ class pyNSGP:
 			O = []
 			for i in range( self.pop_size ):
 				o = deepcopy(selected[i])
-				if ( random() < self.crossover_rate ):
-					o = Variation.SubtreeCrossover( o, selected[ randint( self.pop_size ) ] )
-				if ( random() < self.mutation_rate ):
-					o = Variation.SubtreeMutation( o, self.functions, self.terminals, max_height=self.initialization_max_tree_height )
-				if ( random() < self.op_mutation_rate ):
-					o = Variation.OnePointMutation( o, self.functions, self.terminals )
+				o = Variation.GenerateOffspringMultitree(
+					parent_mt=o,
+					crossovers=self.crossovers,
+					mutations=self.mutations,
+					coeff_opts=self.coeff_opts,
+					donors=selected,
+					internal_nodes=self.functions,
+					leaf_nodes=self.terminals,
+					max_depth=self.initialization_max_tree_height,
+					constraints= {"max_tree_size": self.max_tree_size},
+					partition_features=self.partition_features,
+					prob_delete_tree=self.prob_delete_tree,
+					prob_init_tree=self.prob_init_tree,
+					prob_mt_crossover=self.prob_mt_crossover,
+					perform_only_one_op=True
+				)
 
-				if (len(o.GetSubtree()) > self.max_tree_size) or (o.GetHeight() < self.min_depth):
-					del o
+				for single_int_tree_index in range(o.number_of_trees() - 1, -1, -1):
+					single_internal_tree = o.trees[single_int_tree_index]
+					if (len(single_internal_tree.get_subtree()) > self.max_tree_size) or (single_internal_tree.get_height() < self.min_depth):
+						del o.trees[single_int_tree_index]
+
+				if o.number_of_trees() == 0:
 					o = deepcopy( selected[i] )
 				else:
 					self.fitness_function.Evaluate(o)
@@ -146,7 +176,7 @@ class pyNSGP:
 			self.generations = self.generations + 1
 
 			if self.verbose:
-				print ('g:',self.generations,'elite obj1:', np.round(self.fitness_function.elite.objectives[0],3), ', size:', len(self.fitness_function.elite.GetSubtree()))
+				print ('g:',self.generations,'elite obj1:', np.round(self.fitness_function.elite.objectives[0],4), ', obj2:', np.round(self.fitness_function.elite.objectives[1],4), ', size:', len(self.fitness_function.elite), ', n_trees:', self.fitness_function.elite.number_of_trees())
 
 
 	def FastNonDominatedSorting(self, population):
@@ -167,9 +197,9 @@ class pyNSGP:
 					continue
 				q = population[j]
 
-				if p.Dominates(q):
+				if p.dominates(q):
 					dominated_individuals[p].append(q)
-				elif q.Dominates(p):
+				elif q.dominates(p):
 					domination_counts[p] += 1
 
 			if domination_counts[p] == 0:

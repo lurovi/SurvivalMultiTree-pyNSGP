@@ -3,33 +3,47 @@ from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 import inspect
 
-from pynsgp.Nodes.BaseNode import Node
-from pynsgp.Nodes.SymbolicRegressionNodes import *
-from pynsgp.Fitness.FitnessFunction import SymbolicRegressionFitness
+from sksurv.linear_model import CoxnetSurvivalAnalysis
+
+from genepro.node_impl import *
+
+from pynsgp.Fitness.FitnessFunction import SurvivalRegressionFitness
 from pynsgp.Evolution.Evolution import pyNSGP
+from pynsgp.Nodes.more_node_impl import OOHRdyFeature, InstantiableConstant
 
 
 class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 
-	def __init__(self, 
+	def __init__(self,
+		crossovers,
+		mutations,
+		coeff_opts,
 		pop_size=100, 
 		max_generations=100, 
 		max_evaluations=-1,
 		max_time=-1,
-		functions=[ AddNode(), SubNode(), MulNode(), DivNode() ], 
+		functions=[Plus(), Minus(), Times(), Div()],
 		use_erc=True,
-		crossover_rate=0.9,
-		mutation_rate=0.1,
-		op_mutation_rate=1.0,
-		initialization_max_tree_height=6,
+		error_metric='cindex_ipcw',
+		size_metric='distinct_raw_features',
+		prob_delete_tree=0.05,
+		prob_init_tree=0.1,
+		prob_mt_crossover=0.8,
+		initialization_max_tree_height=4,
 		min_depth=2,
 		tournament_size=4,
 		max_tree_size=100,
-		use_linear_scaling=True,
-		use_interpretability_model=False, 
+		partition_features=False,
+		min_trees_init=1,
+		max_trees_init=5,
 		penalize_duplicates=True,
-		verbose=False
+		verbose=False,
+		alpha=0.01,
+		n_iter=100,
+		l1_ratio=0.9
 		):
+
+		self.largest_value = 1e+8
 
 		args, _, _, values = inspect.getargvalues(inspect.currentframe())
 		values.pop('self')
@@ -44,31 +58,47 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		self.X_ = X
 		self.y_ = y
 		
-		fitness_function = SymbolicRegressionFitness( X, y, self.use_linear_scaling, 
-			use_interpretability_model=self.use_interpretability_model )
+		fitness_function = SurvivalRegressionFitness(
+			X,
+			y,
+			metric=self.error_metric,
+			size_proxy=self.size_metric,
+			alpha=self.alpha,
+			n_iter=self.n_iter,
+			l1_ratio=self.l1_ratio
+		)
 		
 		terminals = []
 		if self.use_erc:
-			terminals.append( EphemeralRandomConstantNode() )
+			terminals.append(InstantiableConstant())
 		n_features = X.shape[1]
 		for i in range(n_features):
-			terminals.append(FeatureNode(i))
+			terminals.append(OOHRdyFeature(i))
 
-		nsgp = pyNSGP(fitness_function, 
-			self.functions, terminals, 
-			pop_size=self.pop_size, 
+		nsgp = pyNSGP(
+			fitness_function=fitness_function,
+			functions=self.functions,
+			terminals=terminals,
+			crossovers=self.crossovers,
+			mutations=self.mutations,
+			coeff_opts=self.coeff_opts,
+			pop_size=self.pop_size,
+			prob_delete_tree=self.prob_delete_tree,
+			prob_init_tree=self.prob_init_tree,
+			prob_mt_crossover=self.prob_mt_crossover,
 			max_generations=self.max_generations,
-			max_time = self.max_time,
-			max_evaluations = self.max_evaluations,
-			crossover_rate=self.crossover_rate,
-			mutation_rate=self.mutation_rate,
-			op_mutation_rate=self.op_mutation_rate,
+			max_time=self.max_time,
+			max_evaluations=self.max_evaluations,
 			initialization_max_tree_height=self.initialization_max_tree_height,
 			min_depth=self.min_depth,
 			max_tree_size=self.max_tree_size,
 			tournament_size=self.tournament_size,
 			penalize_duplicates=self.penalize_duplicates,
-			verbose=self.verbose)
+			verbose=self.verbose,
+			partition_features=self.partition_features,
+			min_trees_init=self.min_trees_init,
+			max_trees_init=self.max_trees_init
+		)
 
 		nsgp.Run()
 		self.nsgp_ = nsgp
@@ -82,7 +112,8 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		# Input validation
 		X = check_array(X)
 		fifu = self.nsgp_.fitness_function
-		prediction = fifu.elite.ls_a + fifu.elite.ls_b * fifu.elite.GetOutput( X )
+		prediction = fifu.elite.get_output( X )
+		prediction.clip(-self.largest_value, self.largest_value, out=prediction)
 
 		return prediction
 
@@ -92,7 +123,22 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		
 		# Check fit has been called
 		prediction = self.predict(X)
-		return -1.0 * np.mean(np.square(y - prediction))
+
+		cox = CoxnetSurvivalAnalysis(
+			n_alphas=1,
+			alphas=[self.alpha],
+			max_iter=self.n_iter,
+			l1_ratio=self.l1_ratio,
+			normalize=True,
+			verbose=False,
+			fit_baseline_model=False
+		)
+		try:
+			cox.fit(X=prediction, y=self.y)
+		except Exception:
+			return 0.0
+
+		return cox.score(X=prediction, y=self.y)
 
 	def get_params(self, deep=True):
 		attributes = inspect.getmembers(self, lambda a:not(inspect.isroutine(a)))
@@ -128,13 +174,11 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		result = "ERROR\tCOMPLEXITY\tMODEL\n"
 		result += '========================================\n'
 		for solution in front:
-			string_repr = str(solution.GetSubtree())
+			string_repr = solution.get_readable_repr()
 			if string_repr in already_seen:
 				continue
 			already_seen.add(string_repr)
 			result += "{:.3f}\t{:.3f}\t".format(solution.objectives[0], solution.objectives[1]) 
-			result += solution.GetHumanExpression()
-			if self.use_linear_scaling:
-				result += '*' + str(solution.ls_b) + ('+' if solution.ls_a > 0 else "") + str(solution.ls_a)
+			result += solution.get_readable_repr()
 			result += "\n"
 		return result

@@ -14,14 +14,10 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     setup_requires=['wheel'],
-    install_requires=[
-        'numpy >= 1.16.1','sklearn'
-    ],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
-    ],
-    python_requires='>=3.6',
+    ]
 
 )

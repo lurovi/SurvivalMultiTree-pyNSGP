@@ -1,0 +1,46 @@
+# warnings
+
+# runners
+warnings: false
+n_jobs: 1
+n_hyperparam_folds: 5
+
+cox_tol_evo: 0.0000001
+cox_downsample_alpha_evo: false #false
+pretune_coxnet_params_evo: true
+pretune_coxnet_easeoff_evo: 1.0
+cox_alpha_min_ratio_evo: 0.01
+cox_simple_evo: false
+cox_maxiter_evo: 100
+cox_performing_final_tuning_evo: false
+cox_fixed_num_features_evo: 5
+
+drop_features_evo: false
+only_generated_evo: false #true
+only_numerical_features_evo: false
+drop_numerical_from_X_evo: false
+inner_val_size_evo: 0.0
+
+verbose_evo: true
+pop_size_evo: 128
+max_gen_evo: 100
+early_stopping_rounds_evo: 10
+max_tree_size_evo: 15
+init_max_depth_evo: 3
+
+
+n_sequential_rounds_evo: 1
+
+prob_init_tree_evo: 0.1
+prob_delete_tree_evo: 0.1
+prob_mt_crossover_evo: 0.25
+min_trees_init_evo: 1
+max_trees_init_evo: 5
+
+# experiment
+seed: 42
+n_replicates: 10
+corrdrop_threshold: 0.98
+test_size: 0.1
+scale_numerical: true
+metric: "cindex_ipcw" # cindex, cindex_ipcw or mean_auc

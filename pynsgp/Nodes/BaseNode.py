@@ -14,13 +14,23 @@ class Node:	# Base class with general functionalities
 		self.ls_b = 1.0
 		self.is_not_arithmetic = False
 
+	def __len__(self):
+		if len(self._children) == 0:
+			return 1
+
+		size = 0
+		for i in range(len(self._children)):
+			size += len(self._children[i])
+
+		return 1 + size
+
 	def Dominates(self, other):
-		better_somewhere = False 
+		better_somewhere = False
 		for i in range(len(self.objectives)):
 			if self.objectives[i] > other.objectives[i]:
 				return False
 			if self.objectives[i] < other.objectives[i]:
-				better_somewhere = True 
+				better_somewhere = True
 
 		return better_somewhere
 
@@ -95,19 +105,19 @@ class Node:	# Base class with general functionalities
 
 
 	def Count_n_nacomp(self, count=None):
-	    if count == None:
-	        count = 0
-	    if (self.is_not_arithmetic):
-	        count += 1
-	        count_args = []
-	        for c in self._children:
-	            count_args.append(c.Count_n_nacomp(count))
-	        count = max(count_args)
-	        return count
-	    else:
-	        if self.arity > 0:
-	            count_args = []
-	            for c in self._children:
-	                count_args.append(c.Count_n_nacomp(count))
-	            count = max(count_args)
-	        return count
+		if count is None:
+			count = 0
+		if self.is_not_arithmetic:
+			count += 1
+			count_args = []
+			for c in self._children:
+				count_args.append(c.Count_n_nacomp(count))
+			count = max(count_args)
+			return count
+		else:
+			if self.arity > 0:
+				count_args = []
+				for c in self._children:
+					count_args.append(c.Count_n_nacomp(count))
+				count = max(count_args)
+			return count
