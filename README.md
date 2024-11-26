@@ -1,7 +1,6 @@
 # pyNSGP
 This Python 3 code is an implementation of multi-objective genetic programming using NSGA-II for symbolic regression.
 
-![example use of pyNSGP for symbolic regression](https://github.com/marcovirgolin/pyNSGP/blob/master/example_pic.jpeg?raw=true)
 
 Note: a C++ re-implementation is available in the [GP-GOMEA repo](https://github.com/marcovirgolin/GP-GOMEA).
 
@@ -9,7 +8,6 @@ Note: a C++ re-implementation is available in the [GP-GOMEA repo](https://github
 ### Note
 Added penalization of duplicates (from ref. [2]) to better preserve diversity (left img: penalization ON, right img: penalization OFF):
 
-![example run with penalization ON and OFF](https://github.com/marcovirgolin/pyNSGP/blob/master/penalize_duplicates.png?raw=true)
 
 ## Dependencies
 Numpy & scikit-learn.

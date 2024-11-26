@@ -2,8 +2,8 @@ import numpy as np
 from copy import deepcopy
 from sksurv.metrics import concordance_index_ipcw, cumulative_dynamic_auc
 from sksurv.linear_model import CoxnetSurvivalAnalysis
-from pynsgp.Nodes.MultiTree import extract_feature_ids
-from sklearn.preprocessing import Normalizer, StandardScaler
+from pynsgp.Nodes.MultiTree import MultiTree
+from sklearn.preprocessing import StandardScaler
 
 
 class SurvivalRegressionFitness:
@@ -44,6 +44,7 @@ class SurvivalRegressionFitness:
         self.tau = self.times[-1]
 
         self.largest_value = 1e+8
+        self.worst_fitness = 1e+12
 
     def Evaluate(self, individual):
         self.evaluations = self.evaluations + 1
@@ -84,14 +85,32 @@ class SurvivalRegressionFitness:
                 verbose=False,
                 fit_baseline_model=False
             )
+            individual.alpha = self.alpha
             try:
                 cox.fit(X=output, y=self.y_train)
             except Exception:
-                return float(np.inf)
+                individual.cox = None
+                individual.coefficients = [1.0] * individual.number_of_trees()
+                individual.offset = 0.0
+                individual.actual_trees_indices = list(range(individual.number_of_trees()))
+                return float(self.worst_fitness)
 
             individual.cox = cox
+            individual.actual_trees_indices = []
+            individual.offset = float(individual.cox.offset_[0])
+            individual.coefficients = individual.cox.coef_.T.astype(float).flatten().tolist()
+            for coef_index in range(len(individual.coefficients)):
+                current_coef = individual.coefficients[coef_index]
+                if current_coef != 0.0:
+                    individual.actual_trees_indices.append(coef_index)
+            if len(individual.actual_trees_indices) == 0:
+                individual.actual_trees_indices = list(range(individual.number_of_trees()))
+                return float(self.worst_fitness)
 
-        risk_scores = individual.cox.predict(output)
+        if individual.cox is None:
+            return float(self.worst_fitness)
+
+        risk_scores = individual.cox.predict(output, alpha=individual.alpha)
         risk_scores.clip(-self.largest_value, self.largest_value, out=risk_scores)
 
         error = np.nan
@@ -116,8 +135,11 @@ class SurvivalRegressionFitness:
             raise AttributeError(f"Unrecognized metric {self.metric}.")
         
         if np.isnan(error):
-            error = np.inf
-        
+            error = self.worst_fitness
+
+        if float(error) > float(self.worst_fitness):
+            error = self.worst_fitness
+
         return float(error)
 
     def EvaluateSizeProxy(self, individual):
@@ -132,12 +154,12 @@ class SurvivalRegressionFitness:
 
     @staticmethod
     def EvaluateTotalNumberOfNodes(individual):
-        return sum([len(tree) for tree in individual.trees])
+        return sum([len(individual.trees[tree_index]) for tree_index in individual.actual_trees_indices])
 
     @staticmethod
     def EvaluateMaxNumberOfNodes(individual):
-        return max([len(tree) for tree in individual.trees])
+        return max([len(individual.trees[tree_index]) for tree_index in individual.actual_trees_indices])
 
     @staticmethod
     def EvaluateDistinctRawFeatures(individual):
-        return len(set([f_id for tree in individual.trees for f_id in extract_feature_ids(tree)]))
+        return len(set([f_id for tree_index in individual.actual_trees_indices for f_id in MultiTree.extract_feature_ids(individual.trees[tree_index])]))

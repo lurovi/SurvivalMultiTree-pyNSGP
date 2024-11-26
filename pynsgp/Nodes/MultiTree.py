@@ -1,22 +1,24 @@
+from __future__ import annotations
 from typing import List
-from genepro.node_impl import Feature
-
+import os
+from genepro.node_impl import Feature, OOHRdyFeature
+from pynsgp.Utils.data import multitree_pickle_string
+from pynsgp.Utils.pickle_persist import compress_pickle, decompress_pickle
 
 import numpy as np
-
-from pynsgp.Nodes.more_node_impl import OOHRdyFeature
 
 
 class MultiTree:
     def __init__(self):
+        self.alpha = None
         self.trees = []
+        self.coefficients = []
+        self.offset = 0.0
         self.actual_trees_indices = []
 
         self.objectives = []
         self.crowding_distance = 0
         self.rank = 0
-        self.ls_a = 0.0
-        self.ls_b = 1.0
         self.fitness = 0
 
         self.cox = None
@@ -26,16 +28,15 @@ class MultiTree:
         return self.get_output(X)
 
     def __str__(self) -> str:
-        strings_representations = [tree.get_readable_repr() for tree in self.trees]
+        strings_representations = [self.trees[tree_index].get_readable_repr() for tree_index in self.actual_trees_indices]
         return ' | '.join(strings_representations)
 
     def __len__(self) -> int:
-        lengths = [len(tree) for tree in self.trees]
+        lengths = [len(self.trees[tree_index]) for tree_index in self.actual_trees_indices]
         return max(lengths)
 
     def get_readable_repr(self) -> str:
-        strings_representations = [tree.get_readable_repr() for tree in self.trees]
-        return ' | '.join(strings_representations)
+        return str(self)
 
     def number_of_trees(self) -> int:
         return len(self.trees)
@@ -61,41 +62,53 @@ class MultiTree:
 
         return better_somewhere
 
+    @staticmethod
+    def extract_feature_ids(tree):
+        feature_ids = set()
+        for node in tree.get_subtree():
+            if isinstance(node, Feature) or isinstance(node, OOHRdyFeature):
+                feature_ids.add(node.id)
+        return list(feature_ids)
 
-def extract_feature_ids(tree):
-    feature_ids = set()
-    for node in tree.get_subtree():
-        if isinstance(node, Feature) or isinstance(node, OOHRdyFeature):
-            feature_ids.add(node.id)
-    return list(feature_ids)
+    @staticmethod
+    def extract_feature_nodes(tree):
+        feature_nodes = list()
+        for node in tree.get_subtree():
+            if isinstance(node, Feature) or isinstance(node, OOHRdyFeature):
+                feature_nodes.append(node)
+        return feature_nodes
 
+    @staticmethod
+    def extract_usable_leaves(
+        idx_tree: int,
+        mt: MultiTree,
+        leaf_nodes: List,
+        partition_features: bool = False,
+    ) -> List:
+        usable_leaf_nodes = leaf_nodes
+        if partition_features:
+            features = list()
+            constants = list()
+            for l in leaf_nodes:
+                if isinstance(l, Feature) or isinstance(l, OOHRdyFeature):
+                    features.append(l)
+                else:
+                    constants.append(l)
+            # pick features from all other trees
+            other_trees = [t for i, t in enumerate(mt.trees) if i != idx_tree and i in mt.actual_trees_indices]
+            used_features = set()
+            for ot in other_trees:
+                used_features.update(MultiTree.extract_feature_ids(ot))
+            usable_leaf_nodes = [
+                f for f in features if f.id not in used_features
+            ] + constants
+        return usable_leaf_nodes
 
-def extract_usable_leaves(
-    idx_tree: int,
-    mt: MultiTree,
-    leaf_nodes: List,
-    partition_features: bool = False,
-) -> List:
-    usable_leaf_nodes = leaf_nodes
-    if partition_features:
-        features = list()
-        constants = list()
-        for l in leaf_nodes:
-            if isinstance(l, Feature) or isinstance(l, OOHRdyFeature):
-                features.append(l)
-            else:
-                constants.append(l)
-        # pick features from all other trees
-        other_trees = [t for i, t in enumerate(mt.trees) if i != idx_tree]
-        used_features = set()
-        for ot in other_trees:
-            used_features.update(extract_feature_ids(ot))
-        usable_leaf_nodes = [
-            f for f in features if f.id not in used_features
-        ] + constants
-    return usable_leaf_nodes
+    def save(self, path: str, generation: int, solution_index: int) -> None:
+        if not os.path.isdir(path):
+            os.makedirs(path, exist_ok=True)
+        compress_pickle(os.path.join(path, multitree_pickle_string(generation, solution_index)), self)
 
-
-
-
-
+    @staticmethod
+    def load(path: str, generation: int, solution_index: int) -> MultiTree:
+        return decompress_pickle(os.path.join(path, multitree_pickle_string(generation, solution_index) + '.pbz2'))

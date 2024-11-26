@@ -1,17 +1,23 @@
+import os
+from venv import create
+
 import numpy as np
-from numpy.random import random, randint
 import time
 from copy import deepcopy
 
+import pandas as pd
+
 from pynsgp.Variation import Variation
 from pynsgp.Selection import Selection
-
+from pynsgp.Utils.stats import create_results_dict
 
 class pyNSGP:
 
 	def __init__(
 		self,
+		path,
 		fitness_function,
+		test_fitness_function,
 		functions,
 		terminals,
 		crossovers,
@@ -20,7 +26,7 @@ class pyNSGP:
 		pop_size=500,
 		prob_delete_tree=0.05,
 		prob_init_tree=0.1,
-		prob_mt_crossover=0.8,
+		prob_mt_crossover=0.05,
 		max_evaluations=-1,
 		max_generations=-1,
 		max_time=-1,
@@ -33,10 +39,13 @@ class pyNSGP:
 		partition_features=False,
 		min_trees_init=1,
 		max_trees_init=5
-		):
+	):
 
+		self.path = path
 		self.pop_size = pop_size
 		self.fitness_function = fitness_function
+		self.X_train = self.fitness_function.X_train
+		self.test_fitness_function = test_fitness_function
 		self.functions = functions
 		self.terminals = terminals
 		self.crossovers = crossovers
@@ -84,6 +93,19 @@ class pyNSGP:
 
 	def Run(self):
 
+		output_data = {'Generation': [], 'TrainTime': [],
+
+					   'TrainObj1Mean': [], 'TrainObj1Median': [], 'TrainObj1Std': [],
+					   'TrainObj1Q1': [], 'TrainObj1Q3': [],
+					   'TrainObj1Min': [], 'TrainObj1Max': [],
+
+					   'Obj2Mean': [], 'Obj2Median': [], 'Obj2Std': [],
+					   'Obj2Q1': [], 'Obj2Q3': [],
+					   'Obj2Min': [], 'Obj2Max': [],
+
+					   'TrainParetoObj1': [], 'ParetoObj2': [], 'TestParetoObj1': []
+					   }
+
 		self.start_time = time.time()
 
 		self.population = []
@@ -93,27 +115,32 @@ class pyNSGP:
 		init_depth_interval = self.pop_size / (self.initialization_max_tree_height - self.min_depth + 1)
 		next_depth_interval = init_depth_interval
 
-		for i in range( self.pop_size ):
+		for i in range(self.pop_size):
 			if i >= next_depth_interval:
 				next_depth_interval += init_depth_interval
 				curr_max_depth += 1
 
-			t = Variation.GenerateRandomMultitree(self.functions, self.terminals, max_depth=curr_max_depth,
-													partition_features=self.partition_features,
-													min_trees_init=self.min_trees_init,
-													max_trees_init=self.max_trees_init
+			t = Variation.GenerateRandomMultitree(self.functions, self.terminals,
+												  max_depth=curr_max_depth, X_train=self.X_train,
+												  partition_features=self.partition_features,
+												  min_trees_init=self.min_trees_init,
+											      max_trees_init=self.max_trees_init
 												)
-			self.fitness_function.Evaluate( t )
-			self.population.append( t )
+			self.fitness_function.Evaluate(t)
+			self.population.append(t)
 
-
+		if curr_max_depth != self.initialization_max_tree_height:
+			raise ValueError(f'At this point the current max depth should be equal to the initialization max tree height, but they differ, respectively, {curr_max_depth} and {self.initialization_max_tree_height}.')
 
 		while not self.__ShouldTerminate():
+			all_train_obj1 = []
+			all_obj2 = []
 
-			selected = Selection.TournamentSelect( self.population, self.pop_size, tournament_size=self.tournament_size )
+			start_gen_time = time.time()
+			selected = Selection.TournamentSelect(self.population, self.pop_size, tournament_size=self.tournament_size)
 
 			O = []
-			for i in range( self.pop_size ):
+			for i in range(self.pop_size):
 				o = deepcopy(selected[i])
 				o = Variation.GenerateOffspringMultitree(
 					parent_mt=o,
@@ -124,6 +151,7 @@ class pyNSGP:
 					internal_nodes=self.functions,
 					leaf_nodes=self.terminals,
 					max_depth=self.initialization_max_tree_height,
+					X_train=self.X_train,
 					constraints= {"max_tree_size": self.max_tree_size},
 					partition_features=self.partition_features,
 					prob_delete_tree=self.prob_delete_tree,
@@ -138,12 +166,13 @@ class pyNSGP:
 						del o.trees[single_int_tree_index]
 
 				if o.number_of_trees() == 0:
-					o = deepcopy( selected[i] )
+					o = deepcopy(selected[i])
 				else:
 					self.fitness_function.Evaluate(o)
 
 				O.append(o)
-
+				all_train_obj1.append(o.objectives[0])
+				all_obj2.append(o.objectives[1])
 
 			PO = self.population+O
 			
@@ -164,7 +193,8 @@ class pyNSGP:
 				fronts[curr_front_idx].sort(key=lambda x: x.crowding_distance, reverse=True) 
 
 				while len(fronts[curr_front_idx]) > 0 and len(new_population) < self.pop_size:
-					new_population.append( fronts[curr_front_idx][0] )	# pop first because they were sorted in desc order
+					# pop first because they were sorted in desc order
+					new_population.append( fronts[curr_front_idx][0] )
 					fronts[curr_front_idx].pop(0)
 
 				# clean up leftovers
@@ -175,9 +205,53 @@ class pyNSGP:
 
 			self.generations = self.generations + 1
 
+			end_gen_time = time.time()
+			gen_time = end_gen_time - start_gen_time
+
+			stats_train_obj1 = create_results_dict(all_train_obj1)
+			stats_obj2 = create_results_dict(all_obj2)
+
+			output_data["Generation"].append(self.generations)
+			output_data["TrainTime"].append(gen_time)
+
+			output_data["TrainObj1Max"].append(stats_train_obj1['max'])
+			output_data["TrainObj1Min"].append(stats_train_obj1['min'])
+			output_data["TrainObj1Mean"].append(stats_train_obj1['mean'])
+			output_data["TrainObj1Median"].append(stats_train_obj1['median'])
+			output_data["TrainObj1Std"].append(stats_train_obj1['std'])
+			output_data["TrainObj1Q1"].append(stats_train_obj1['q1'])
+			output_data["TrainObj1Q3"].append(stats_train_obj1['q3'])
+
+			output_data["Obj2Max"].append(stats_obj2['max'])
+			output_data["Obj2Min"].append(stats_obj2['min'])
+			output_data["Obj2Mean"].append(stats_obj2['mean'])
+			output_data["Obj2Median"].append(stats_obj2['median'])
+			output_data["Obj2Std"].append(stats_obj2['std'])
+			output_data["Obj2Q1"].append(stats_obj2['q1'])
+			output_data["Obj2Q3"].append(stats_obj2['q3'])
+
+			current_front = sorted(self.latest_front, key=lambda x: -x.objectives[0])
+			train_pareto_obj1 = ''
+			pareto_obj2 = ''
+			test_pareto_obj1 = ''
+			for pareto_index, solution in enumerate(current_front, 0):
+				train_pareto_obj1 += str(solution.objectives[0]) + ' '
+				pareto_obj2 += str(solution.objectives[1]) + ' '
+				test_pareto_obj1 += str(self.test_fitness_function.EvaluateError(solution)) + ' '
+				solution.save(path=self.path, generation=self.generations, solution_index=pareto_index + 1)
+
+			train_pareto_obj1 = train_pareto_obj1.strip()
+			pareto_obj2 = pareto_obj2.strip()
+			test_pareto_obj1 = test_pareto_obj1.strip()
+
+			output_data["TrainParetoObj1"].append(train_pareto_obj1)
+			output_data["ParetoObj2"].append(pareto_obj2)
+			output_data["TestParetoObj1"].append(test_pareto_obj1)
+
 			if self.verbose:
 				print ('g:',self.generations,'elite obj1:', np.round(self.fitness_function.elite.objectives[0],4), ', obj2:', np.round(self.fitness_function.elite.objectives[1],4), ', size:', len(self.fitness_function.elite), ', n_trees:', self.fitness_function.elite.number_of_trees())
 
+		pd.DataFrame(output_data).to_csv(os.path.join(self.path, 'output.csv'), sep=',', header=True, index=False)
 
 	def FastNonDominatedSorting(self, population):
 		rank_counter = 0

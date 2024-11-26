@@ -3,22 +3,24 @@ from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 import inspect
 
-from sksurv.linear_model import CoxnetSurvivalAnalysis
-
 from genepro.node_impl import *
 
 from pynsgp.Fitness.FitnessFunction import SurvivalRegressionFitness
 from pynsgp.Evolution.Evolution import pyNSGP
-from pynsgp.Nodes.more_node_impl import OOHRdyFeature, InstantiableConstant
 
 
 class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 
 	def __init__(self,
+		path,
+		X_train,
+		y_train,
+		X_test,
+		y_test,
 		crossovers,
 		mutations,
 		coeff_opts,
-		pop_size=100, 
+		pop_size=100,
 		max_generations=100, 
 		max_evaluations=-1,
 		max_time=-1,
@@ -54,29 +56,46 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 	def fit(self, X, y):
 
 		# Check that X and y have correct shape
-		X, y = check_X_y(X, y)
-		self.X_ = X
-		self.y_ = y
-		
+		X_train, y_train = check_X_y(self.X_train, self.y_train)
+		self.X_ = X_train
+		self.y_ = y_train
+
+		X_test, y_test = check_X_y(self.X_test, self.y_test)
+
 		fitness_function = SurvivalRegressionFitness(
-			X,
-			y,
+			X_train,
+			y_train,
 			metric=self.error_metric,
 			size_proxy=self.size_metric,
 			alpha=self.alpha,
 			n_iter=self.n_iter,
 			l1_ratio=self.l1_ratio
 		)
+
+		test_fitness_function = SurvivalRegressionFitness(
+			X_train,
+			y_train,
+			metric=self.error_metric,
+			size_proxy=self.size_metric,
+			alpha=self.alpha,
+			n_iter=self.n_iter,
+			l1_ratio=self.l1_ratio,
+			X_test=X_test,
+			y_test=y_test
+		)
 		
 		terminals = []
 		if self.use_erc:
 			terminals.append(InstantiableConstant())
-		n_features = X.shape[1]
+		n_features = X_train.shape[1]
+		self.n_features_in_ = n_features
 		for i in range(n_features):
 			terminals.append(OOHRdyFeature(i))
 
 		nsgp = pyNSGP(
+			path=self.path,
 			fitness_function=fitness_function,
+			test_fitness_function=test_fitness_function,
 			functions=self.functions,
 			terminals=terminals,
 			crossovers=self.crossovers,
@@ -112,8 +131,10 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		# Input validation
 		X = check_array(X)
 		fifu = self.nsgp_.fitness_function
-		prediction = fifu.elite.get_output( X )
+		prediction = fifu.elite(X)
 		prediction.clip(-self.largest_value, self.largest_value, out=prediction)
+
+		prediction = fifu.elite.scaler.transform(prediction)
 
 		return prediction
 
@@ -124,21 +145,9 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		# Check fit has been called
 		prediction = self.predict(X)
 
-		cox = CoxnetSurvivalAnalysis(
-			n_alphas=1,
-			alphas=[self.alpha],
-			max_iter=self.n_iter,
-			l1_ratio=self.l1_ratio,
-			normalize=True,
-			verbose=False,
-			fit_baseline_model=False
-		)
-		try:
-			cox.fit(X=prediction, y=self.y)
-		except Exception:
-			return 0.0
+		fifu = self.nsgp_.fitness_function
 
-		return cox.score(X=prediction, y=self.y)
+		return fifu.elite.cox.score(X=prediction, y=y)
 
 	def get_params(self, deep=True):
 		attributes = inspect.getmembers(self, lambda a:not(inspect.isroutine(a)))

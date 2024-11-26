@@ -1,21 +1,11 @@
-from copy import deepcopy
-import numpy as np
 from typing import List, Tuple
 from numpy.random import randint
-from numpy.random import random
-from sympy import simplify
-
-from pynsgp.Nodes.MultiTree import MultiTree, extract_usable_leaves, extract_feature_ids
-import numpy as np
-from numpy.random import shuffle
-from copy import deepcopy
+from pynsgp.Utils.rand_util import choice
+from pynsgp.Nodes.MultiTree import MultiTree
 
 from genepro.variation import *
 from genepro.variation import __check_tree_meets_all_constraints
-from genepro.node_impl import Plus, Minus, Times, Feature, Constant
-
-
-from pynsgp.Nodes.more_node_impl import OOHRdyFeature, InstantiableConstant
+from genepro.node_impl import Plus, Minus, Times, Feature, Constant, OOHRdyFeature, InstantiableConstant
 
 
 def CreateDummyTree():
@@ -36,6 +26,62 @@ def InstantiateTree(n):
     return n
 
 
+def SimplifyConstants(tree: Node, **kwargs) -> Node:
+    if CheckIfTreeHasOnlyOperatorsAndConstants(tree):
+        result: float = float(tree(np.ones((1, 1)), **kwargs)[0])
+        new_node: InstantiableConstant = InstantiableConstant(result, **kwargs)
+        parent: Node = tree.parent
+        child_id: int = tree.child_id
+        if parent is not None:
+            parent.replace_child(new_node, child_id)
+        return new_node
+    for i in range(tree.arity):
+        _ = SimplifyConstants(tree.get_child(i), **kwargs)
+    return tree
+
+
+def CheckIfTreeHasOnlyOperatorsAndConstants(tree: Node) -> bool:
+    arity: int = tree.arity
+    if arity > 0:
+        for i in range(arity):
+            if not CheckIfTreeHasOnlyOperatorsAndConstants(tree.get_child(i)):
+                return False
+        return True
+    if isinstance(tree, Constant) or isinstance(tree, InstantiableConstant):
+        return True
+    return False
+
+
+def ForceNonConstantTree(tree: Node, X_train: np.ndarray, n_trials: int = 5):
+    n_features: int = X_train.shape[1]
+    possible_feature_nodes: List[OOHRdyFeature] = [OOHRdyFeature(i) for i in range(n_features)]
+    tree = SimplifyConstants(tree)
+    if isinstance(tree, Constant) or isinstance(tree, InstantiableConstant):
+        tree = choice(possible_feature_nodes).create_new_empty_node()
+
+    if n_features == 1:
+        return tree
+
+    batch_size: int = min(X_train.shape[0], 100)
+    batch: np.ndarray = X_train[:batch_size]
+
+    count: int = 0
+    while len(np.unique(tree(batch))) == 1 and count < n_trials:
+        chosen_node: Node = choice(MultiTree.extract_feature_nodes(tree))
+        new_node = choice([node_to_sample for node_to_sample in possible_feature_nodes if node_to_sample.id != chosen_node.id]).create_new_empty_node()
+
+        parent: Node = chosen_node.parent
+        child_id: int = chosen_node.child_id
+        if parent is not None:
+            parent.replace_child(new_node, child_id)
+        else:
+            tree = new_node
+
+        count += 1
+
+    return tree
+
+
 def GenerateRandomSimpleTree(
     internal_nodes: List[Node],
     leaf_nodes: List[Node],
@@ -47,14 +93,14 @@ def GenerateRandomSimpleTree(
     prob_leaf = 0.01 + (curr_depth / max_depth) ** 3
 
     if curr_depth == max_depth or randu() < prob_leaf:
-        n = deepcopy(randc(leaf_nodes)[0])
+        n = choice(leaf_nodes).create_new_empty_node()
     else:
         # if at least one parent is not Plus, Minus, or Times, then
         # pick only among Plus, Minus, or Times
         if _check_ancestor_is_not_linear(parent):
-            n = deepcopy(randc([Plus(), Times(), Minus()])[0])
+            n = choice([Plus(), Times(), Minus()]).create_new_empty_node()
         else:
-            n = deepcopy(randc(internal_nodes)[0])
+            n = choice(internal_nodes).create_new_empty_node()
 
     for _ in range(n.arity):
         c = GenerateRandomSimpleTree(
@@ -97,21 +143,20 @@ def GenerateRandomNonlinearTree(
     prob_leaf = 0.01 + (curr_depth / max_depth) ** 3
 
     if curr_depth == max_depth or randu() < prob_leaf:
-        n = deepcopy(randc(leaf_nodes)[0])
+        n = choice(leaf_nodes).create_new_empty_node()
     else:
         if curr_depth == 0:
             # no linear transf
-            n = deepcopy(
-                randc(
+            n = choice(
                     [
                         x
                         for x in internal_nodes
                         if not (isinstance(x, Plus) or isinstance(x, Minus))
                     ]
-                )[0]
-            )
+                ).create_new_empty_node()
+
         else:
-            n = deepcopy(randc(internal_nodes)[0])
+            n = choice(internal_nodes).create_new_empty_node()
 
     for _ in range(n.arity):
         c = GenerateRandomNonlinearTree(
@@ -126,9 +171,10 @@ def GenerateRandomMultitree(
     internal_nodes: List,
     leaf_nodes: List,
     max_depth: int,
+    X_train: np.ndarray,
     partition_features: bool = False,
     min_trees_init: int = 1,
-    max_trees_init: int = 5,
+    max_trees_init: int = 5
 ) -> MultiTree:
     mt = MultiTree()
 
@@ -140,7 +186,7 @@ def GenerateRandomMultitree(
         else:
             constants.append(l)
 
-    num_trees = np.random.choice(list(range(min_trees_init, max_trees_init + 1)))
+    num_trees = choice(list(range(min_trees_init, max_trees_init + 1)))
     features_used = set()
     for _ in range(num_trees):
         curr_leaves = leaf_nodes
@@ -156,119 +202,16 @@ def GenerateRandomMultitree(
         #    internal_nodes=internal_nodes, leaf_nodes=curr_leaves, max_depth=max_depth
         #)
 
-        generated_tree_is_constant = True
-        generations_trials = 0
-        while generated_tree_is_constant and generations_trials < 5:
-            tree = GenerateRandomSimpleTree(
-                internal_nodes=internal_nodes, leaf_nodes=curr_leaves, max_depth=max_depth,
-                curr_depth=0, parent=None,
-            )
-            feature_ids_extracted_from_tree = extract_feature_ids(tree)
-            if len(feature_ids_extracted_from_tree) > 0:
-                generated_tree_is_constant = False
-            else:
-                generations_trials += 1
+        tree = GenerateRandomSimpleTree(
+            internal_nodes=internal_nodes, leaf_nodes=curr_leaves, max_depth=max_depth,
+            curr_depth=0, parent=None,
+        )
+        tree = ForceNonConstantTree(tree, X_train)
 
-        features_used.update(feature_ids_extracted_from_tree)
+        features_used.update(MultiTree.extract_feature_ids(tree))
         mt.trees.append(tree)
 
     return mt
-
-
-def OnePointMutation( individual, functions, terminals ):
-
-    arity_functions = {}
-    for f in functions:
-        arity = f.arity
-        if arity not in arity_functions:
-            arity_functions[arity] = [f]
-        else:
-            arity_functions[arity].append(f)
-
-    nodes = individual.GetSubtree()
-    prob = 1.0/len(nodes)
-
-    for i in range(len(nodes)):
-        if random() < prob:
-            arity = nodes[i].arity
-            if arity == 0:
-                idx = randint( len(terminals) )
-                n = deepcopy( terminals[idx] )
-            else:
-                idx = randint(len(arity_functions[arity]))
-                n = deepcopy(arity_functions[arity][idx])
-
-            # update link to children
-            for child in nodes[i]._children:
-                n.AppendChild(child)
-
-            # update link to parent node
-            p = nodes[i].parent
-            if p:
-                idx = p.DetachChild( nodes[i] )
-                p.InsertChildAtPosition(idx, n)
-            else:
-                nodes[i] = n
-                individual = n
-
-
-    return individual
-
-
-def SubtreeMutation( individual, functions, terminals, max_height=4 ):
-
-    mutation_branch = GenerateRandomTree( functions, terminals, max_height )
-
-    nodes = individual.GetSubtree()
-
-    #nodes = __GetCandidateNodesAtUniformRandomDepth( nodes )
-
-    to_replace = nodes[randint(len(nodes))]
-
-    if not to_replace.parent:
-        del individual
-        return mutation_branch
-
-
-    p = to_replace.parent
-    idx = p.DetachChild(to_replace)
-    p.InsertChildAtPosition(idx, mutation_branch)
-
-    return individual
-
-
-def SubtreeCrossover( individual, donor ):
-
-    # this version of crossover returns 1 child
-
-    nodes1 = individual.GetSubtree()
-    nodes2 = donor.GetSubtree()	# no need to deep copy all nodes of parent2
-
-    #nodes1 = __GetCandidateNodesAtUniformRandomDepth( nodes1 )
-    #nodes2 = __GetCandidateNodesAtUniformRandomDepth( nodes2 )
-
-    to_swap1 = nodes1[ randint(len(nodes1)) ]
-    to_swap2 = deepcopy( nodes2[ randint(len(nodes2)) ] )	# we deep copy now, only the sutbree from parent2
-    to_swap2.parent = None
-
-    p1 = to_swap1.parent
-
-    if not p1:
-        return to_swap2
-
-    idx = p1.DetachChild(to_swap1)
-    p1.InsertChildAtPosition(idx, to_swap2)
-
-    return individual
-
-
-def __GetCandidateNodesAtUniformRandomDepth( nodes ):
-
-    depths = np.unique( [x.GetDepth() for x in nodes] )
-    chosen_depth = depths[randint(len(depths))]
-    candidates = [x for x in nodes if x.GetDepth() == chosen_depth]
-
-    return candidates
 
 
 def MultitreeLevelCrossover(
@@ -280,7 +223,7 @@ def MultitreeLevelCrossover(
     if idx_picked_tree is None:
         idx_picked_tree = np.random.randint(len(mt.trees))
 
-    donor_tree = deepcopy(np.random.choice(donor_mt.trees))
+    donor_tree = deepcopy(choice(donor_mt.trees))
 
     # drop the tree to be replaced
     mt.trees.pop(idx_picked_tree)
@@ -297,6 +240,7 @@ def GenerateOffspringMultitree(
     internal_nodes: list,
     leaf_nodes: list,
     max_depth: int,
+    X_train: np.ndarray,
     constraints: dict = {"max_tree_size": 100},
     partition_features: bool = False,
     prob_delete_tree: float = 0.05,
@@ -312,7 +256,7 @@ def GenerateOffspringMultitree(
 
     # set the offspring to a copy (to be modified) of the parent
     offspring_mt = deepcopy(parent_mt)
-    idx_picked_tree = np.random.choice(range(len(offspring_mt.trees)))
+    idx_picked_tree = choice(range(len(offspring_mt.trees)))
 
     # Case: delete tree
     if np.random.uniform() < prob_delete_tree and len(offspring_mt.trees) > 1:
@@ -320,40 +264,32 @@ def GenerateOffspringMultitree(
         if perform_only_one_op:
             return offspring_mt
         # update idx picked tree
-        idx_picked_tree = np.random.choice(range(len(offspring_mt.trees)))
+        idx_picked_tree = choice(range(len(offspring_mt.trees)))
 
     # compute what features can be used
-    usable_leaf_nodes = extract_usable_leaves(
+    usable_leaf_nodes = MultiTree.extract_usable_leaves(
         idx_picked_tree, offspring_mt, leaf_nodes, partition_features
     )
 
     # Case: generate a new tree to add
     if np.random.uniform() < prob_init_tree and len(usable_leaf_nodes) > 0:
         # initialize a new tree
-        generated_tree_is_constant = True
-        generations_trials = 0
-        while generated_tree_is_constant and generations_trials < 5:
-            new_tree = GenerateRandomNonlinearTree(
-                internal_nodes=internal_nodes,
-                leaf_nodes=usable_leaf_nodes,
-                max_depth=max_depth,
-            )
-            feature_ids_extracted_from_tree = extract_feature_ids(new_tree)
-            if len(feature_ids_extracted_from_tree) > 0:
-                generated_tree_is_constant = False
-            else:
-                generations_trials += 1
-
+        new_tree = GenerateRandomNonlinearTree(
+            internal_nodes=internal_nodes,
+            leaf_nodes=usable_leaf_nodes,
+            max_depth=max_depth,
+        )
+        new_tree = ForceNonConstantTree(new_tree, X_train)
         offspring_mt.trees.append(new_tree)
         if perform_only_one_op:
             return offspring_mt
         # update idx picked tree
-        idx_picked_tree = np.random.choice(range(len(offspring_mt.trees)))
+        idx_picked_tree = choice(range(len(offspring_mt.trees)))
 
     # Case: multitree crossover
     if np.random.uniform() < prob_mt_crossover:
         # pick a donor
-        donor_mt = np.random.choice(donors)
+        donor_mt = choice(donors)
         offspring_mt = MultitreeLevelCrossover(
             offspring_mt,
             donor_mt,
@@ -362,7 +298,7 @@ def GenerateOffspringMultitree(
         if perform_only_one_op:
             return offspring_mt
 
-        idx_picked_tree = np.random.choice(range(len(offspring_mt.trees)))
+        idx_picked_tree = choice(range(len(offspring_mt.trees)))
 
     # Next: undergo node-level variation operators
 
@@ -379,16 +315,17 @@ def GenerateOffspringMultitree(
     for i in random_order:
         var_op = structural_var_ops[i]
         # randomize donors
-        donor_trees = [np.random.choice(donor.trees) for donor in donors]
+        donor_trees = [choice(donor.trees) for donor in donors]
         offspring_tree, changed = __undergo_variation_operator_2(
+            X_train,
             var_op,
             offspring_tree,
             crossovers,
             mutations,
             coeff_opts,
-            np.random.choice(donor_trees),
+            choice(donor_trees),
             internal_nodes,
-            usable_leaf_nodes,
+            usable_leaf_nodes
         )
 
         # check offspring_tree meets constraints, else revert to backup
@@ -406,14 +343,15 @@ def GenerateOffspringMultitree(
 
     # apply coeff mutations
     offspring_tree, changed = __undergo_variation_operator_2(
-        np.random.choice(coeff_opts),
+        X_train,
+        choice(coeff_opts),
         offspring_tree,
         [],
         [],
         coeff_opts,
         None,
         internal_nodes,
-        usable_leaf_nodes,
+        usable_leaf_nodes
     )
 
     # print("len of offspring tree", len(offspring_tree.get_subtree()))
@@ -478,6 +416,7 @@ def _check_ancestor_is_not_linear(ancestor: Node | None) -> bool:
     return False
 
 def __undergo_variation_operator_2(
+    X_train: np.ndarray,
     var_op: dict,
     offspring: Node,
     crossovers,
@@ -500,29 +439,13 @@ def __undergo_variation_operator_2(
     # next, we need to provide the right arguments based on the type of ops
     if var_op in crossovers:
         # we need a donor
-        offspring = var_op_fun(offspring, donor, **var_op["kwargs"])
+        offspring = var_op_fun(offspring, deepcopy(donor), **var_op["kwargs"])
+        offspring = ForceNonConstantTree(offspring, X_train)
     elif var_op in mutations:
         # we need to provide node types
-        generated_tree_is_constant = True
-        generations_trials = 0
-        while generated_tree_is_constant and generations_trials < 5:
-            offspring = var_op_fun(
-                offspring, internal_nodes, leaf_nodes, **var_op["kwargs"]
-            )
-            feature_ids_extracted_from_tree = extract_feature_ids(offspring)
-            if len(feature_ids_extracted_from_tree) > 0:
-                generated_tree_is_constant = False
-            else:
-                generations_trials += 1
+        offspring = var_op_fun(offspring, deepcopy(internal_nodes), deepcopy(leaf_nodes), **var_op["kwargs"])
+        offspring = ForceNonConstantTree(offspring, X_train)
     elif var_op in coeff_opts:
-        generated_tree_is_constant = True
-        generations_trials = 0
-        while generated_tree_is_constant and generations_trials < 5:
-            offspring = var_op_fun(offspring, **var_op["kwargs"])
-            feature_ids_extracted_from_tree = extract_feature_ids(offspring)
-            if len(feature_ids_extracted_from_tree) > 0:
-                generated_tree_is_constant = False
-            else:
-                generations_trials += 1
-
+        offspring = var_op_fun(offspring, **var_op["kwargs"])
+        offspring = ForceNonConstantTree(offspring, X_train)
     return offspring, True
