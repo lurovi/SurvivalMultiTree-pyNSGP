@@ -5,7 +5,7 @@ import pandas as pd
 from sksurv.metrics import concordance_index_ipcw
 
 from pynsgp.Utils.pickle_persist import compress_pickle, decompress_pickle
-from pynsgp.Utils.data import load_dataset, preproc_dataset, cox_net_path_string, nsgp_path_string, save_json
+from pynsgp.Utils.data import load_dataset, preproc_dataset, cox_net_path_string, nsgp_path_string
 from sklearn.model_selection import train_test_split
 from genepro.node_impl import *
 from sksurv.linear_model import CoxPHSurvivalAnalysis, CoxnetSurvivalAnalysis
@@ -143,11 +143,13 @@ def run_cox_net(
         n_alphas=n_alphas,
         l1_ratio=l1_ratio,
         alpha_min_ratio=alpha_min_ratio,
-        max_iter=max_iter,
-        seed=random_state
+        max_iter=max_iter
     )
     if not os.path.isdir(final_path):
         os.makedirs(final_path, exist_ok=True)
+
+    model_file_name: str = f'model_seed{random_state}'
+    output_file_name: str = f'output_seed{random_state}.csv'
 
     model = CoxnetSurvivalAnalysis(
         n_alphas=n_alphas,
@@ -179,7 +181,7 @@ def run_cox_net(
     model.fit(X_train, y_train)
     end_time = time.time()
     training_time = end_time - start_time
-    compress_pickle(os.path.join(final_path, 'model'), model)
+    compress_pickle(os.path.join(final_path, model_file_name), model)
 
     output_data = {"DistinctRawFeatures": [], "Alpha": [], "TrainError": [], "TestError": [],
                    "TrainTime": [], "TrainEvalTime": [], "TestEvalTime": []}
@@ -223,7 +225,7 @@ def run_cox_net(
             print('q1: ', error, ' q2: ', k)
             print()
 
-    pd.DataFrame(output_data).to_csv(os.path.join(final_path, 'output.csv'), sep=',', header=True, index=False)
+    pd.DataFrame(output_data).to_csv(os.path.join(final_path, output_file_name), sep=',', header=True, index=False)
 
 
 def run_evolution(
@@ -254,7 +256,6 @@ def run_evolution(
         method='nsgp',
         dataset_name=dataset_name,
         test_size=test_size,
-        seed=random_state,
         pop_size=pop_size,
         num_gen=num_gen,
         max_size=max_size,
@@ -270,6 +271,9 @@ def run_evolution(
     if not os.path.isdir(final_path):
         os.makedirs(final_path, exist_ok=True)
 
+    pareto_file_name: str = f'pareto_seed{random_state}'
+    output_file_name: str = f'output_seed{random_state}.csv'
+
     set_random_seed(random_state)
 
     X_train, X_test, y_train, y_test = load_preprocess_data(
@@ -282,6 +286,8 @@ def run_evolution(
 
     nsgp = NSGP(
         path=final_path,
+        pareto_file_name=pareto_file_name,
+        output_file_name=output_file_name,
         X_train=X_train,
         y_train=y_train,
         X_test=X_test,

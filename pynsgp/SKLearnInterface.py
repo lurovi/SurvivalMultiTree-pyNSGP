@@ -13,6 +13,8 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 
 	def __init__(self,
 		path,
+		pareto_file_name,
+		output_file_name,
 		X_train,
 		y_train,
 		X_test,
@@ -94,6 +96,8 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 
 		nsgp = pyNSGP(
 			path=self.path,
+			pareto_file_name=self.pareto_file_name,
+			output_file_name=self.output_file_name,
 			fitness_function=fitness_function,
 			test_fitness_function=test_fitness_function,
 			functions=self.functions,

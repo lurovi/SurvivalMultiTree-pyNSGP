@@ -1,9 +1,7 @@
 from __future__ import annotations
 from typing import List
-import os
 from genepro.node_impl import Feature, OOHRdyFeature
-from pynsgp.Utils.data import multitree_pickle_string
-from pynsgp.Utils.pickle_persist import compress_pickle, decompress_pickle
+
 
 import numpy as np
 
@@ -103,12 +101,3 @@ class MultiTree:
                 f for f in features if f.id not in used_features
             ] + constants
         return usable_leaf_nodes
-
-    def save(self, path: str, generation: int, solution_index: int) -> None:
-        if not os.path.isdir(path):
-            os.makedirs(path, exist_ok=True)
-        compress_pickle(os.path.join(path, multitree_pickle_string(generation, solution_index)), self)
-
-    @staticmethod
-    def load(path: str, generation: int, solution_index: int) -> MultiTree:
-        return decompress_pickle(os.path.join(path, multitree_pickle_string(generation, solution_index) + '.pbz2'))

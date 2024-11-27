@@ -7,6 +7,7 @@ from copy import deepcopy
 
 import pandas as pd
 
+from pynsgp.Utils.pickle_persist import compress_pickle
 from pynsgp.Variation import Variation
 from pynsgp.Selection import Selection
 from pynsgp.Utils.stats import create_results_dict
@@ -16,6 +17,8 @@ class pyNSGP:
 	def __init__(
 		self,
 		path,
+		pareto_file_name,
+		output_file_name,
 		fitness_function,
 		test_fitness_function,
 		functions,
@@ -42,6 +45,8 @@ class pyNSGP:
 	):
 
 		self.path = path
+		self.pareto_file_name = pareto_file_name
+		self.output_file_name = output_file_name
 		self.pop_size = pop_size
 		self.fitness_function = fitness_function
 		self.X_train = self.fitness_function.X_train
@@ -109,6 +114,7 @@ class pyNSGP:
 		self.start_time = time.time()
 
 		self.population = []
+		all_pareto_fronts = []
 
 		# ramped half-n-half
 		curr_max_depth = self.min_depth
@@ -234,11 +240,12 @@ class pyNSGP:
 			train_pareto_obj1 = ''
 			pareto_obj2 = ''
 			test_pareto_obj1 = ''
+			pareto_front_of_this_gen = []
 			for pareto_index, solution in enumerate(current_front, 0):
 				train_pareto_obj1 += str(solution.objectives[0]) + ' '
 				pareto_obj2 += str(solution.objectives[1]) + ' '
 				test_pareto_obj1 += str(self.test_fitness_function.EvaluateError(solution)) + ' '
-				solution.save(path=self.path, generation=self.generations, solution_index=pareto_index + 1)
+				pareto_front_of_this_gen.append(solution)
 
 			train_pareto_obj1 = train_pareto_obj1.strip()
 			pareto_obj2 = pareto_obj2.strip()
@@ -247,11 +254,13 @@ class pyNSGP:
 			output_data["TrainParetoObj1"].append(train_pareto_obj1)
 			output_data["ParetoObj2"].append(pareto_obj2)
 			output_data["TestParetoObj1"].append(test_pareto_obj1)
+			all_pareto_fronts.append(pareto_front_of_this_gen)
 
 			if self.verbose:
 				print ('g:',self.generations,'elite obj1:', np.round(self.fitness_function.elite.objectives[0],4), ', obj2:', np.round(self.fitness_function.elite.objectives[1],4), ', size:', len(self.fitness_function.elite), ', n_trees:', self.fitness_function.elite.number_of_trees())
 
-		pd.DataFrame(output_data).to_csv(os.path.join(self.path, 'output.csv'), sep=',', header=True, index=False)
+		pd.DataFrame(output_data).to_csv(os.path.join(self.path, str(self.output_file_name)), sep=',', header=True, index=False)
+		compress_pickle(os.path.join(self.path, str(self.pareto_file_name)), all_pareto_fronts)
 
 	def FastNonDominatedSorting(self, population):
 		rank_counter = 0

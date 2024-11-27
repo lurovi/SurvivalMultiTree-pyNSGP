@@ -1,5 +1,5 @@
 pop_size: 100
-num_gen: 50
+num_gen: 100
 max_size: 40
 min_depth: 2
 init_max_height: 4
@@ -7,5 +7,5 @@ tournament_size: 3
 min_trees_init: 3
 max_trees_init: 6
 alpha: 0.000001
-max_iter_nsgp: 100
+max_iter: 100
 l1_ratio: 0.9

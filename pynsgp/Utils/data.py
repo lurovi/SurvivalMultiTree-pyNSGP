@@ -1,14 +1,9 @@
 from typing import Tuple, Dict, Any
 import pandas as pd
 import numpy as np
-import simplejson as json
 from sksurv import datasets as sks_datasets
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 import os
-
-
-def multitree_pickle_string(generation: int, solution_index: int) -> str:
-    return f'paretosol{solution_index}_gen{generation}'
 
 
 def nsgp_path_string(
@@ -16,7 +11,6 @@ def nsgp_path_string(
         method: str,
         dataset_name: str,
         test_size: float,
-        seed: int,
         pop_size: int,
         num_gen: int,
         max_size: int,
@@ -35,8 +29,7 @@ def nsgp_path_string(
         dataset_name.strip() + '_' + str(test_size),
         f'pop{pop_size}_gen{num_gen}',
         f'maxsize{max_size}_mindepth{min_depth}_initmaxheight{init_max_height}_toursize{tournament_size}',
-        f'mintrees{min_trees_init}_maxtrees{max_trees_init}_alpha{alpha}_l1{l1_ratio}_maxiter{max_iter}',
-        f'seed{seed}'
+        f'mintrees{min_trees_init}_maxtrees{max_trees_init}_alpha{alpha}_l1{l1_ratio}_maxiter{max_iter}'
     )
 
 
@@ -46,7 +39,6 @@ def cox_net_path_string(
         dataset_name: str,
         test_size: float,
         n_alphas: int,
-        seed: int,
         l1_ratio: float,
         alpha_min_ratio: float,
         max_iter: int
@@ -55,16 +47,8 @@ def cox_net_path_string(
         base_path,
         method.strip(),
         dataset_name.strip() + '_' + str(test_size),
-        f'nalphas{n_alphas}_alpharatio{alpha_min_ratio}_l1{l1_ratio}_maxiter{max_iter}',
-        f'seed{seed}'
+        f'nalphas{n_alphas}_alpharatio{alpha_min_ratio}_l1{l1_ratio}_maxiter{max_iter}'
     )
-
-
-def save_json(path: str, data: Dict, title: str = 'output'):
-    if not os.path.isdir(path):
-        os.makedirs(path, exist_ok=True)
-    with open(os.path.join(path, title + ".json"), "w") as outfile:
-        json.dump(data, outfile, indent=4, ignore_nan=True)
 
 
 def load_dataset(
