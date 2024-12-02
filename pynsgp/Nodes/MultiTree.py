@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import List
-from genepro.node_impl import Feature, OOHRdyFeature
-
+from genepro.node_impl import Feature, OOHRdyFeature, InstantiableConstant, Constant
 
 import numpy as np
 
@@ -20,7 +19,7 @@ class MultiTree:
         self.fitness = 0
 
         self.cox = None
-        self.scaler = None
+
 
     def __call__(self, X: np.ndarray) -> np.ndarray:
         return self.get_output(X)
@@ -47,7 +46,7 @@ class MultiTree:
         for tree in self.trees:
             out = tree(X)
             outs.append(out)
-        outs = np.array(outs)
+        outs = np.array(outs).T
         return outs.reshape((len(X), len(self.trees)))
 
     def dominates(self, other):
@@ -75,6 +74,14 @@ class MultiTree:
             if isinstance(node, Feature) or isinstance(node, OOHRdyFeature):
                 feature_nodes.append(node)
         return feature_nodes
+
+    @staticmethod
+    def extract_constant_nodes(tree):
+        constant_nodes = list()
+        for node in tree.get_subtree():
+            if isinstance(node, Constant) or isinstance(node, InstantiableConstant):
+                constant_nodes.append(node)
+        return constant_nodes
 
     @staticmethod
     def extract_usable_leaves(

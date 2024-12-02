@@ -1,30 +1,34 @@
-# pyNSGP
-This Python 3 code is an implementation of multi-objective genetic programming using NSGA-II for symbolic regression.
+# SurvivalMultiTree-pyNSGP
 
+This repository contains the code for Multi-Objective Genetic Programming with Multi-trees as individuals for Survival Regression.
 
-Note: a C++ re-implementation is available in the [GP-GOMEA repo](https://github.com/marcovirgolin/GP-GOMEA).
+# Setup
 
+This code runs on Ubuntu and it uses Python as coding language.
+Open the terminal and type the following commands:
 
-### Note
-Added penalization of duplicates (from ref. [2]) to better preserve diversity (left img: penalization ON, right img: penalization OFF):
+```bash
+git clone -b v1.6.1 https://github.com/giorgia-nadizar/genepro.git
+git clone https://github.com/lurovi/SurvivalMultiTree-pyNSGP.git
+cd SurvivalMultiTree-pyNSGP
+conda env create -f environment.yml
+conda activate genesurv-mt
+cd ..
+cd genepro
+pip3 install -U .
+cd ..
+cd SurvivalMultiTree-pyNSGP
+pip3 install -U .
+```
 
+# Run
 
-## Dependencies
-Numpy & scikit-learn.
+This version enables you to address a Survival Regression problem by either using coxnet or NSGP with Multi-trees as individuals.
+The python file that runs the experiment is the 'main.py', which in turns calls one of the functions contained in 'methods.py' (one function for each method).
+The 'main.py' can be executed by using 'run\_single\_main.sh' and providing the required parameters: method, seed, dataset name, test size in percentage w.r.t. the provided dataset, path to the configuration file with method-specific hyper-parameters, a run id that identifies the run (employed to log the eventual successful completion of the run in the results folder), an integer (1 or 0) indicating whether or not enabling verbose output.
+Moreover, parallel runs can be executed by using 'run_\parallel\_main.sh' (it requires parallel GNU to be installed on the system: 'sudo apt install parallel').
+The parallel .sh script requires, as parameters, the path to a .txt file containing, for each line, the comma-separated sequence of parameters for a given run.
+Therefore, if this .txt file contains N lines, the parallel script will execute N runs by parallelizing on the provided number of cores (the second parameter).
 
-## Installation
-Run `pip install --user .` from within the folder.
+Results are saved in the results folder, and a .txt file named 'completed\_<run\_id>.txt' is created within this folder containing the sequences of parameters of the successful runs sharing the same run id. Runs that raised an exception are tracked in the run\_with\_exceptions folder.
 
-## Example 
-pyNSGP can be run as a scikit-learn regression estimator. See `test.py` for an example. 
-The first objective is the mean-squared-error, the second is solution size. If `use_interpretability_model=True` is used, then the second objective is implemented by predicting human-interpretability according to the linear model found in the paper referenced below.
-
-## Reference
-If you use this code, please support our research by citing the related paper(s) that applies:
-> [1] M. Virgolin, A. De Lorenzo, E. Medvet, F. Randone. "Learning a Formula of Interpretability to Learn Interpretable Formulas". [Parallel Problem Solving from Nature XVI (2020)](https://doi.org/10.1007/978-3-030-58115-2_6). [arXiv preprint](https://arxiv.org/abs/2004.11170). [Video](https://www.youtube.com/watch?v=V2lmbStyMGE&ab_channel=MarcoVirgolin).
-
-> [2] M. Virgolin, A. De Lorenzo, F. Randone, E. Medvet, M. Wahde. "Model Learning with Personalized Interpretability Estimation (ML-PIE)". [EC+DM Workshop at the Genetic and Evolutionary Computation Conference (2021)](https://doi.org/10.1145/3449726.3463166). [arXiv preprint](https://arxiv.org/abs/2104.06060). [Video](https://www.youtube.com/watch?v=6_sYWKz-Kuc).
-
-
-For the other part of the code used in [1], see [this repository](https://github.com/MaLeLabTs/GPFormulasInterpretability). 
-For the other part of the code used in [2], see [this repository](https://github.com/marcovirgolin/ML-PIE). 

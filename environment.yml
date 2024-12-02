@@ -1,4 +1,4 @@
-name: genesurv
+name: genesurv-mt
 channels:
   - defaults
 dependencies:
@@ -51,6 +51,7 @@ dependencies:
       - scikit-survival==0.23.1
       - scipy==1.14.1
       - seaborn==0.13.2
+      - simplejson==3.19.3
       - six==1.16.0
       - statsmodels==0.14.4
       - sympy==1.13.3

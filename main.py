@@ -105,7 +105,7 @@ if __name__ == '__main__':
 
             crossovers = [
                 {"fun": node_level_crossover, "rate": 0.25},
-                {"fun": safe_subtree_crossover, "rate": 0.05, "kwargs": {"max_depth": init_max_height}},
+                {"fun": safe_subtree_crossover, "rate": 0.1, "kwargs": {"max_depth": init_max_height}},
             ]
             mutations = [
                 {"fun": subtree_mutation, "rate": 0.25, "kwargs": {"max_depth": init_max_height}},
@@ -173,7 +173,9 @@ if __name__ == '__main__':
         with open(os.path.join(results_path, f'completed_run{run_id}.txt'), 'a+') as terminal_std_out:
             terminal_std_out.write(run_string_descr)
             terminal_std_out.write('\n')
-    except Exception:
+        print(f'Completed run: {run_string_descr}.')
+    except Exception as e:
         error_string = str(traceback.format_exc())
         with open(os.path.join(run_with_exceptions_path, f'{run_string_descr.replace(",", "___")}'), 'w') as f:
             f.write(error_string)
+        print(f'Exception in run: {run_string_descr}.\n{str(e)}')

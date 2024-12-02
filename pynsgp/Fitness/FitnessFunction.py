@@ -3,7 +3,6 @@ from copy import deepcopy
 from sksurv.metrics import concordance_index_ipcw, cumulative_dynamic_auc
 from sksurv.linear_model import CoxnetSurvivalAnalysis
 from pynsgp.Nodes.MultiTree import MultiTree
-from sklearn.preprocessing import StandardScaler
 
 
 class SurvivalRegressionFitness:
@@ -69,19 +68,12 @@ class SurvivalRegressionFitness:
             individual.cached_output = ','.join([str(round(nnn, 8)) for nnn in output.flatten().tolist()])
 
         if self.is_training:
-            scaler = StandardScaler()
-            scaler = scaler.fit(output)
-            individual.scaler = scaler
-
-        output = individual.scaler.transform(output)
-
-        if self.is_training:
             cox = CoxnetSurvivalAnalysis(
                 n_alphas=1,
                 alphas=[self.alpha],
                 max_iter=self.n_iter,
                 l1_ratio=self.l1_ratio,
-                normalize=False,
+                normalize=True,
                 verbose=False,
                 fit_baseline_model=False
             )

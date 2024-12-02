@@ -1,5 +1,4 @@
 import os
-from venv import create
 
 import numpy as np
 import time
@@ -108,7 +107,8 @@ class pyNSGP:
 					   'Obj2Q1': [], 'Obj2Q3': [],
 					   'Obj2Min': [], 'Obj2Max': [],
 
-					   'TrainParetoObj1': [], 'ParetoObj2': [], 'TestParetoObj1': []
+					   'TrainParetoObj1': [], 'ParetoObj2': [], 'TestParetoObj1': [],
+					   'ParetoNTrees': [], 'ParetoMaxTreeSize': []
 					   }
 
 		self.start_time = time.time()
@@ -240,6 +240,8 @@ class pyNSGP:
 			train_pareto_obj1 = ''
 			pareto_obj2 = ''
 			test_pareto_obj1 = ''
+			pareto_n_trees = ''
+			pareto_max_tree_size = ''
 			pareto_front_of_this_gen = []
 			for pareto_index, solution in enumerate(current_front, 0):
 				train_pareto_obj1 += str(solution.objectives[0]) + ' '
@@ -247,13 +249,20 @@ class pyNSGP:
 				test_pareto_obj1 += str(self.test_fitness_function.EvaluateError(solution)) + ' '
 				pareto_front_of_this_gen.append(solution)
 
+				pareto_n_trees += str(solution.number_of_actual_trees()) + ' '
+				pareto_max_tree_size += str(len(solution)) + ' '
+
 			train_pareto_obj1 = train_pareto_obj1.strip()
 			pareto_obj2 = pareto_obj2.strip()
 			test_pareto_obj1 = test_pareto_obj1.strip()
+			pareto_n_trees = pareto_n_trees.strip()
+			pareto_max_tree_size = pareto_max_tree_size.strip()
 
 			output_data["TrainParetoObj1"].append(train_pareto_obj1)
 			output_data["ParetoObj2"].append(pareto_obj2)
 			output_data["TestParetoObj1"].append(test_pareto_obj1)
+			output_data["ParetoNTrees"].append(pareto_n_trees)
+			output_data["ParetoMaxTreeSize"].append(pareto_max_tree_size)
 			all_pareto_fronts.append(pareto_front_of_this_gen)
 
 			if self.verbose:

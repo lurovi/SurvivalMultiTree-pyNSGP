@@ -79,7 +79,7 @@ def load_preprocess_data(
         scale_numerical=scale_numerical
     )
 
-    return X_train, X_test, y_train, y_test
+    return X_train.to_numpy(), X_test.to_numpy(), y_train, y_test
 
 
 def run_gridsearch_cox_net(
@@ -156,7 +156,9 @@ def run_cox_net(
         l1_ratio=l1_ratio,
         alpha_min_ratio=alpha_min_ratio,
         max_iter=max_iter,
-        verbose=verbose
+        verbose=verbose,
+        normalize=True,
+        fit_baseline_model=False
     )
 
     set_random_seed(random_state)
@@ -300,13 +302,13 @@ def run_evolution(
         max_evaluations=-1,
         max_time=-1,
         functions=[Plus(), Minus(), Times(), AnalyticQuotient(),
-                   Square(), Cube(), Sqrt(), Power(),
-                   Exp(), Log(), Sin(), Cos()],
+                   Square(), Cube(), Sqrt(),
+                   Log(), Sin()],
         use_erc=True,
         error_metric='cindex_ipcw',
         size_metric='distinct_raw_features',
-        prob_delete_tree=0.2,
-        prob_init_tree=0.3,
+        prob_delete_tree=0.05,
+        prob_init_tree=0.05,
         prob_mt_crossover=0.1,
         initialization_max_tree_height=init_max_height,
         min_depth=min_depth,

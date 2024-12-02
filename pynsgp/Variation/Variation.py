@@ -26,6 +26,37 @@ def InstantiateTree(n):
     return n
 
 
+def LinearCombination(coefficients: List[InstantiableConstant], features: List[OOHRdyFeature], offset: InstantiableConstant):
+    if len(coefficients) != len(features):
+        raise ValueError(f'Length mismatch between coefficients and features.')
+
+    multiplications: List[Times] = []
+
+    for coefficient, feature in zip(coefficients, features):
+        mul: Times = Times()
+        mul.insert_child(coefficient)
+        mul.insert_child(feature)
+        multiplications.append(mul)
+
+    tree: Plus = Plus()
+
+    tree.insert_child(multiplications[0])
+    tree.insert_child(multiplications[1])
+
+    for i in range(2, len(multiplications)):
+        new_node: Plus = Plus()
+        new_node.insert_child(tree)
+        new_node.insert_child(multiplications[i])
+        tree = new_node
+
+    new_node: Plus = Plus()
+    new_node.insert_child(tree)
+    new_node.insert_child(offset)
+    tree = new_node
+
+    return tree
+
+
 def SimplifyConstants(tree: Node, **kwargs) -> Node:
     if CheckIfTreeHasOnlyOperatorsAndConstants(tree):
         result: float = float(tree(np.ones((1, 1)), **kwargs)[0])
@@ -52,8 +83,11 @@ def CheckIfTreeHasOnlyOperatorsAndConstants(tree: Node) -> bool:
     return False
 
 
-def ForceNonConstantTree(tree: Node, X_train: np.ndarray, n_trials: int = 5):
+def SimplifyAndForceNonConstantTree(tree: Node, X_train: np.ndarray, n_trials: int = 5):
     n_features: int = X_train.shape[1]
+    batch_size: int = min(X_train.shape[0], 100)
+    batch: np.ndarray = X_train[:batch_size]
+
     possible_feature_nodes: List[OOHRdyFeature] = [OOHRdyFeature(i) for i in range(n_features)]
     tree = SimplifyConstants(tree)
     if isinstance(tree, Constant) or isinstance(tree, InstantiableConstant):
@@ -61,9 +95,6 @@ def ForceNonConstantTree(tree: Node, X_train: np.ndarray, n_trials: int = 5):
 
     if n_features == 1:
         return tree
-
-    batch_size: int = min(X_train.shape[0], 100)
-    batch: np.ndarray = X_train[:batch_size]
 
     count: int = 0
     while len(np.unique(tree(batch))) == 1 and count < n_trials:
@@ -78,6 +109,24 @@ def ForceNonConstantTree(tree: Node, X_train: np.ndarray, n_trials: int = 5):
             tree = new_node
 
         count += 1
+
+    return tree
+
+
+def ForceNonConstantTree(tree: Node, X_train: np.ndarray):
+    if CheckIfTreeHasOnlyOperatorsAndConstants(tree):
+        n_features: int = X_train.shape[1]
+        possible_feature_nodes: List[OOHRdyFeature] = [OOHRdyFeature(i) for i in range(n_features)]
+
+        chosen_node: InstantiableConstant = choice(MultiTree.extract_constant_nodes(tree))
+        new_node: OOHRdyFeature = choice(possible_feature_nodes).create_new_empty_node()
+
+        parent: Node = chosen_node.parent
+        child_id: int = chosen_node.child_id
+        if parent is not None:
+            parent.replace_child(new_node, child_id)
+        else:
+            tree = new_node
 
     return tree
 
@@ -176,6 +225,10 @@ def GenerateRandomMultitree(
     min_trees_init: int = 1,
     max_trees_init: int = 5
 ) -> MultiTree:
+    n_features: int = X_train.shape[1]
+    batch_size: int = min(X_train.shape[0], 100)
+    batch: np.ndarray = X_train[:batch_size]
+
     mt = MultiTree()
 
     features = list()
@@ -201,13 +254,17 @@ def GenerateRandomMultitree(
         #tree = GenerateRandomTree(
         #    internal_nodes=internal_nodes, leaf_nodes=curr_leaves, max_depth=max_depth
         #)
-
-        tree = GenerateRandomSimpleTree(
-            internal_nodes=internal_nodes, leaf_nodes=curr_leaves, max_depth=max_depth,
-            curr_depth=0, parent=None,
-        )
+        count = 0
+        keep_generating = True
+        while keep_generating and count < 5:
+            tree = GenerateRandomSimpleTree(
+                internal_nodes=internal_nodes, leaf_nodes=curr_leaves, max_depth=max_depth,
+                curr_depth=0, parent=None,
+            )
+            if len(np.unique(tree(batch))) > 1:
+                keep_generating = False
+            count += 1
         tree = ForceNonConstantTree(tree, X_train)
-
         features_used.update(MultiTree.extract_feature_ids(tree))
         mt.trees.append(tree)
 
@@ -248,6 +305,9 @@ def GenerateOffspringMultitree(
     prob_mt_crossover: float = 0.0,
     perform_only_one_op: bool = True
 ) -> MultiTree:
+    n_features: int = X_train.shape[1]
+    batch_size: int = min(X_train.shape[0], 100)
+    batch: np.ndarray = X_train[:batch_size]
 
     if prob_mt_crossover > 0 and partition_features:
         raise ValueError(
@@ -274,11 +334,17 @@ def GenerateOffspringMultitree(
     # Case: generate a new tree to add
     if np.random.uniform() < prob_init_tree and len(usable_leaf_nodes) > 0:
         # initialize a new tree
-        new_tree = GenerateRandomNonlinearTree(
-            internal_nodes=internal_nodes,
-            leaf_nodes=usable_leaf_nodes,
-            max_depth=max_depth,
-        )
+        count = 0
+        keep_generating = True
+        while keep_generating and count < 5:
+            new_tree = GenerateRandomNonlinearTree(
+                internal_nodes=internal_nodes,
+                leaf_nodes=usable_leaf_nodes,
+                max_depth=max_depth,
+            )
+            if len(np.unique(new_tree(batch))) > 1:
+                keep_generating = False
+            count += 1
         new_tree = ForceNonConstantTree(new_tree, X_train)
         offspring_mt.trees.append(new_tree)
         if perform_only_one_op:
@@ -434,18 +500,40 @@ def __undergo_variation_operator_2(
         # nope
         return offspring, False
 
+    n_features: int = X_train.shape[1]
+    batch_size: int = min(X_train.shape[0], 100)
+    batch: np.ndarray = X_train[:batch_size]
+
     # prepare the function to call
     var_op_fun = var_op["fun"]
     # next, we need to provide the right arguments based on the type of ops
     if var_op in crossovers:
         # we need a donor
-        offspring = var_op_fun(offspring, deepcopy(donor), **var_op["kwargs"])
+        count = 0
+        keep_generating = True
+        while keep_generating and count < 5:
+            offspring = var_op_fun(offspring, deepcopy(donor), **var_op["kwargs"])
+            if len(np.unique(offspring(batch))) > 1:
+                keep_generating = False
+            count += 1
         offspring = ForceNonConstantTree(offspring, X_train)
     elif var_op in mutations:
         # we need to provide node types
-        offspring = var_op_fun(offspring, deepcopy(internal_nodes), deepcopy(leaf_nodes), **var_op["kwargs"])
+        count = 0
+        keep_generating = True
+        while keep_generating and count < 5:
+            offspring = var_op_fun(offspring, deepcopy(internal_nodes), deepcopy(leaf_nodes), **var_op["kwargs"])
+            if len(np.unique(offspring(batch))) > 1:
+                keep_generating = False
+            count += 1
         offspring = ForceNonConstantTree(offspring, X_train)
     elif var_op in coeff_opts:
-        offspring = var_op_fun(offspring, **var_op["kwargs"])
+        count = 0
+        keep_generating = True
+        while keep_generating and count < 5:
+            offspring = var_op_fun(offspring, **var_op["kwargs"])
+            if len(np.unique(offspring(batch))) > 1:
+                keep_generating = False
+            count += 1
         offspring = ForceNonConstantTree(offspring, X_train)
     return offspring, True

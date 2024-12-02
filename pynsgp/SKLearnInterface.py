@@ -138,18 +138,16 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		prediction = fifu.elite(X)
 		prediction.clip(-self.largest_value, self.largest_value, out=prediction)
 
-		prediction = fifu.elite.scaler.transform(prediction)
-
 		return prediction
 
 	def score(self, X, y=None):
 		if y is None:
 			raise ValueError('The ground truth y was not set')
-		
-		# Check fit has been called
-		prediction = self.predict(X)
 
 		fifu = self.nsgp_.fitness_function
+
+		# Check fit has been called
+		prediction = self.predict(X)
 
 		return fifu.elite.cox.score(X=prediction, y=y)
 

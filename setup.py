@@ -5,11 +5,11 @@ with open('README.md', 'r') as fh:
 
 
 setuptools.setup(
-    name='pyNSGP',
-    version='0.1',
+    name='SurvivalMultiTree-pyNSGP',
+    version='1.1.0',
     author='Marco Virgolin',
     author_email='marco.virgolin@gmail.com',
-    url='https://github.com/marcovirgolin/pyNSGP',
+    url='https://github.com/lurovi/SurvivalMultiTree-pyNSGP',
     packages=setuptools.find_packages(),
     long_description=long_description,
     long_description_content_type='text/markdown',
