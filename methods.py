@@ -3,18 +3,19 @@ import time
 
 import pandas as pd
 from sksurv.metrics import concordance_index_ipcw
+from pymoo.indicators.hv import HV
 
-from pynsgp.Utils.pickle_persist import compress_pickle, decompress_pickle
-from pynsgp.Utils.data import load_dataset, preproc_dataset, cox_net_path_string, nsgp_path_string
+from pynsgp.Utils.pickle_persist import compress_pickle
+from pynsgp.Utils.data import load_dataset, cox_net_path_string, nsgp_path_string, simple_onehot_and_nan_drop
 from sklearn.model_selection import train_test_split
 from genepro.node_impl import *
-from sksurv.linear_model import CoxPHSurvivalAnalysis, CoxnetSurvivalAnalysis
+from sksurv.linear_model import CoxnetSurvivalAnalysis
 from pynsgp.SKLearnInterface import pyNSGPEstimator as NSGP
 import numpy as np
 import random
 
 
-def get_coxnet_at_k_coefs(cox: CoxnetSurvivalAnalysis, k: int) -> tuple:
+def get_coxnet_at_k_coefs(cox: CoxnetSurvivalAnalysis, k: int) -> tuple | None:
     coef_t = cox.coef_.T
     alphas_n_coefs_at_k = []
     for i, alpha in enumerate(cox.alphas_):
@@ -63,63 +64,26 @@ def load_preprocess_data(
         random_state=random_state
     )
 
-    X_train, y_train, col_transformer = preproc_dataset(
-        X_train,
-        y_train,
-        name=dataset_name,
-        drop_corr_threhsold=corr_drop_threshold,
-        scale_numerical=scale_numerical
-    )
+    #X_train, y_train, col_transformer = preproc_dataset(
+    #    X_train,
+    #    y_train,
+    #    name=dataset_name,
+    #    drop_corr_threhsold=corr_drop_threshold,
+    #    scale_numerical=scale_numerical
+    #)
 
-    X_test, y_test, _ = preproc_dataset(
-        X_test,
-        y_test,
-        col_transformer=col_transformer,
-        name=dataset_name,
-        scale_numerical=scale_numerical
-    )
+    #X_test, y_test, _ = preproc_dataset(
+    #    X_test,
+    #    y_test,
+    #    col_transformer=col_transformer,
+    #    name=dataset_name,
+    #    scale_numerical=scale_numerical
+    #)
+
+    X_train, y_train, col_transformer = simple_onehot_and_nan_drop(X_train, y_train)
+    X_test, y_test, _ = simple_onehot_and_nan_drop(X_test, y_test, col_transformer)
 
     return X_train.to_numpy(), X_test.to_numpy(), y_train, y_test
-
-
-def run_gridsearch_cox_net(
-        linear_model,
-        corr_drop_threshold,
-        scale_numerical,
-        random_state,
-        dataset_name,
-        test_size
-) -> None:
-    if linear_model not in ('coxnet', 'coxph'):
-        raise AttributeError(f'Unrecognized linear model {linear_model}.')
-
-    possible_linear_models = {
-        'coxnet': CoxnetSurvivalAnalysis(),
-        'coxph': CoxPHSurvivalAnalysis()
-    }
-
-    possible_grids = {
-        'coxnet': {
-            'n_alphas': [10, 100, 200, 300],
-            'alpha_min_ratio': [0.1, 0.5, 1.0],
-            'l1_ratio': [0.1, 0.2, 0.5, 0.8, 0.9]
-        },
-        'coxph': {
-            'alpha': [0.01, 0.1, 0.5, 1.0, 2.0],
-            'ties': ['breslow', 'efron'],
-            'n_iter': [100, 500, 1000]
-        }
-    }
-
-    set_random_seed(random_state)
-
-    X_train, X_test, y_train, y_test = load_preprocess_data(
-        corr_drop_threshold=corr_drop_threshold,
-        scale_numerical=scale_numerical,
-        random_state=random_state,
-        dataset_name=dataset_name,
-        test_size=test_size
-    )
 
 
 def run_cox_net(
@@ -128,6 +92,7 @@ def run_cox_net(
         scale_numerical,
         random_state,
         dataset_name,
+        normalize,
         test_size,
         n_alphas,
         l1_ratio,
@@ -139,6 +104,7 @@ def run_cox_net(
         base_path=results_path,
         method='coxnet',
         dataset_name=dataset_name,
+        normalize=normalize,
         test_size=test_size,
         n_alphas=n_alphas,
         l1_ratio=l1_ratio,
@@ -157,7 +123,7 @@ def run_cox_net(
         alpha_min_ratio=alpha_min_ratio,
         max_iter=max_iter,
         verbose=verbose,
-        normalize=True,
+        normalize=normalize,
         fit_baseline_model=False
     )
 
@@ -171,9 +137,13 @@ def run_cox_net(
         test_size=test_size
     )
 
-    lower, upper = np.percentile([y_i[1] for y_i in y_train], [5, 95])
-    times = np.arange(lower, upper)
-    tau = times[-1]
+    lower, upper = np.percentile([y_i[1] for y_i in y_train], [1, 99])
+    train_times = np.arange(lower, upper)
+    tau_train = train_times[-1]
+
+    lower, upper = np.percentile([y_i[1] for y_i in y_test], [1, 99])
+    test_times = np.arange(lower, upper)
+    tau_test = test_times[-1]
 
     n_features = X_train.shape[1]
 
@@ -186,12 +156,15 @@ def run_cox_net(
     compress_pickle(os.path.join(final_path, model_file_name), model)
 
     output_data = {"DistinctRawFeatures": [], "Alpha": [], "TrainError": [], "TestError": [],
+                   "TrainHV": [], "TestHV": [],
                    "TrainTime": [], "TrainEvalTime": [], "TestEvalTime": []}
+
+    ref_point = np.array([0.0, n_features])
 
     for k in range(1, n_features + 1):
         result = get_coxnet_at_k_coefs(model, k)
         if result is None:
-            break
+            continue
         output_data["TrainTime"].append(training_time)
         alpha = float(result[0])
         output_data['Alpha'].append(alpha)
@@ -207,9 +180,12 @@ def run_cox_net(
         train_eval_time = end_time - start_time
         output_data["TrainEvalTime"].append(train_eval_time)
         risk_scores.clip(-largest_value, largest_value, out=risk_scores)
-        error = -1.0 * concordance_index_ipcw(
-            survival_train=y_train, survival_test=y_train, estimate=risk_scores, tau=tau
-        )[0]
+        try:
+            error = -1.0 * concordance_index_ipcw(
+                survival_train=y_train, survival_test=y_train, estimate=risk_scores, tau=tau_train
+            )[0]
+        except ValueError:
+            error = 0.0
         output_data['TrainError'].append(error)
 
         start_time = time.time()
@@ -218,14 +194,25 @@ def run_cox_net(
         test_eval_time = end_time - start_time
         output_data["TestEvalTime"].append(test_eval_time)
         risk_scores.clip(-largest_value, largest_value, out=risk_scores)
-        error = -1.0 * concordance_index_ipcw(
-            survival_train=y_train, survival_test=y_test, estimate=risk_scores, tau=tau
-        )[0]
+        try:
+            error = -1.0 * concordance_index_ipcw(
+                survival_train=y_train, survival_test=y_test, estimate=risk_scores, tau=tau_test
+            )[0]
+        except ValueError:
+            error = 0.0
         output_data['TestError'].append(error)
 
         if verbose:
             print('q1: ', error, ' q2: ', k)
             print()
+
+    train_pareto = np.array([[error, size] for error, size in zip(output_data["TrainError"], output_data["DistinctRawFeatures"])])
+    train_hv_value = HV(ref_point)(train_pareto)
+    output_data["TrainHV"].extend([train_hv_value] * len(output_data["DistinctRawFeatures"]))
+
+    test_pareto = np.array([[error, size] for error, size in zip(output_data["TestError"], output_data["DistinctRawFeatures"])])
+    test_hv_value = HV(ref_point)(test_pareto)
+    output_data["TestHV"].extend([test_hv_value] * len(output_data["DistinctRawFeatures"]))
 
     pd.DataFrame(output_data).to_csv(os.path.join(final_path, output_file_name), sep=',', header=True, index=False)
 
@@ -239,6 +226,7 @@ def run_evolution(
         scale_numerical,
         random_state,
         dataset_name,
+        normalize,
         test_size,
         pop_size,
         num_gen,
@@ -257,6 +245,7 @@ def run_evolution(
         base_path=results_path,
         method='nsgp',
         dataset_name=dataset_name,
+        normalize=normalize,
         test_size=test_size,
         pop_size=pop_size,
         num_gen=num_gen,
@@ -301,9 +290,7 @@ def run_evolution(
         max_generations=num_gen,
         max_evaluations=-1,
         max_time=-1,
-        functions=[Plus(), Minus(), Times(), AnalyticQuotient(),
-                   Square(), Cube(), Sqrt(),
-                   Log(), Sin()],
+        functions=[Plus(), Minus(), Times(), AnalyticQuotient(), Square(), Log()],
         use_erc=True,
         error_metric='cindex_ipcw',
         size_metric='distinct_raw_features',
@@ -321,7 +308,8 @@ def run_evolution(
         verbose=verbose,
         alpha=alpha,
         n_iter=max_iter,
-        l1_ratio=l1_ratio
+        l1_ratio=l1_ratio,
+        normalize=normalize
     )
     nsgp.fit(X_train, y_train)
 

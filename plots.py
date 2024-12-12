@@ -1,3 +1,4 @@
+import statistics
 from typing import Any
 
 import fastplot
@@ -7,9 +8,16 @@ import pandas as pd
 import numpy as np
 import os
 
+from pynsgp.Utils.data import nsgp_path_string, cox_net_path_string
+
+import warnings
 import yaml
 
-from pynsgp.Utils.data import nsgp_path_string, cox_net_path_string
+
+warnings.filterwarnings("ignore", category=SyntaxWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
 
@@ -27,10 +35,10 @@ def callback_scatter_plot(plt, coxnet_n_features_list, coxnet_errors_list, nsgp_
         # blue
         ax.scatter(err, size, c='#283ADF', marker='v', s=100, edgecolor='black', linewidth=0.8)
 
-    ax.set_ylim(0, 15)
-    ax.set_yticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
-    ax.set_xlim(-1.0, -0.4)
-    ax.set_xticks([-0.9, -0.8, -0.7, -0.6, -0.5])
+    ax.set_ylim(0, 21)
+    ax.set_yticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
+    ax.set_xlim(-1.0, -0.0)
+    ax.set_xticks([-0.9, -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1])
     ax.tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
     ax.set_xlabel('Error')
     ax.set_ylabel('Number of Features')
@@ -137,7 +145,7 @@ if __name__ == '__main__':
         except yaml.YAMLError as exc:
             raise exc
 
-    test_size: int = 0.3
+    test_size: float = 0.3
 
     pop_size: int = nsgp_config_dict['pop_size']
     num_gen: int = nsgp_config_dict['num_gen']
@@ -157,7 +165,9 @@ if __name__ == '__main__':
     max_iter: int = coxnet_config_dict['max_iter']
 
     for split_type in ['Train', 'Test']:
-        for dataset_name in ['whas500', 'gbsg2', 'veterans_lung_cancer']:
+        for dataset_name in ['pbc2', 'support2', 'framingham', 'breast_cancer_metabric', 'breast_cancer_metabric_relapse']:
+            cox_hv_values = []
+            nsgp_hv_values = []
             for seed in range(1, 5 + 1):
                 coxd = read_coxnet(
                     base_path=base_path,
@@ -173,6 +183,8 @@ if __name__ == '__main__':
 
                 coxnet_n_features_list = list(coxd['DistinctRawFeatures'])
                 coxnet_errors_list = list(coxd[split_type + 'Error'])
+                cox_this_hv = list(coxd[split_type + 'HV'])[-1]
+                cox_hv_values.append(cox_this_hv)
 
                 nsgpd = read_nsgp(
                     base_path=base_path,
@@ -195,6 +207,10 @@ if __name__ == '__main__':
 
                 nsgp_n_features_list = [float(val) for val in nsgpd.loc[num_gen - 1, 'ParetoObj2'].split(' ')]
                 nsgp_errors_list = [float(val) for val in nsgpd.loc[num_gen - 1, split_type + 'ParetoObj1'].split(' ')]
+                nsgp_this_hv = list(nsgpd[split_type + 'HV'])[-1]
+                nsgp_hv_values.append(nsgp_this_hv)
 
                 scatter_plot(dataset=dataset_name, seed=seed, split_type=split_type.strip(), coxnet_n_features_list=coxnet_n_features_list, coxnet_errors_list=coxnet_errors_list, nsgp_n_features_list=nsgp_n_features_list, nsgp_errors_list=nsgp_errors_list)
 
+            print(f'{split_type} {dataset_name} HV COX ', statistics.median(cox_hv_values), ' ', statistics.mean(cox_hv_values))
+            print(f'{split_type} {dataset_name} HV NSGP ', statistics.median(nsgp_hv_values), ' ', statistics.mean(nsgp_hv_values))

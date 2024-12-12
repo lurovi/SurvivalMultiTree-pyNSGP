@@ -5,6 +5,7 @@ import time
 from copy import deepcopy
 
 import pandas as pd
+from pymoo.indicators.hv import HV
 
 from pynsgp.Utils.pickle_persist import compress_pickle
 from pynsgp.Variation import Variation
@@ -107,9 +108,13 @@ class pyNSGP:
 					   'Obj2Q1': [], 'Obj2Q3': [],
 					   'Obj2Min': [], 'Obj2Max': [],
 
+					   'TrainHV': [], 'TestHV': [],
 					   'TrainParetoObj1': [], 'ParetoObj2': [], 'TestParetoObj1': [],
 					   'ParetoNTrees': [], 'ParetoMaxTreeSize': []
 					   }
+
+		n_features = self.X_train.shape[1]
+		ref_point = np.array([0.0, n_features])
 
 		self.start_time = time.time()
 
@@ -243,14 +248,20 @@ class pyNSGP:
 			pareto_n_trees = ''
 			pareto_max_tree_size = ''
 			pareto_front_of_this_gen = []
+			train_pareto_errors_size_of_this_gen = []
+			test_pareto_errors_size_of_this_gen = []
 			for pareto_index, solution in enumerate(current_front, 0):
+				error_on_the_test = self.test_fitness_function.EvaluateError(solution)
 				train_pareto_obj1 += str(solution.objectives[0]) + ' '
 				pareto_obj2 += str(solution.objectives[1]) + ' '
-				test_pareto_obj1 += str(self.test_fitness_function.EvaluateError(solution)) + ' '
+				test_pareto_obj1 += str(error_on_the_test) + ' '
 				pareto_front_of_this_gen.append(solution)
 
 				pareto_n_trees += str(solution.number_of_actual_trees()) + ' '
 				pareto_max_tree_size += str(len(solution)) + ' '
+
+				train_pareto_errors_size_of_this_gen.append([solution.objectives[0], solution.objectives[1]])
+				test_pareto_errors_size_of_this_gen.append([error_on_the_test, solution.objectives[1]])
 
 			train_pareto_obj1 = train_pareto_obj1.strip()
 			pareto_obj2 = pareto_obj2.strip()
@@ -258,11 +269,21 @@ class pyNSGP:
 			pareto_n_trees = pareto_n_trees.strip()
 			pareto_max_tree_size = pareto_max_tree_size.strip()
 
+			train_pareto_errors_size_of_this_gen = np.array(train_pareto_errors_size_of_this_gen)
+			test_pareto_errors_size_of_this_gen = np.array(test_pareto_errors_size_of_this_gen)
+
 			output_data["TrainParetoObj1"].append(train_pareto_obj1)
 			output_data["ParetoObj2"].append(pareto_obj2)
 			output_data["TestParetoObj1"].append(test_pareto_obj1)
 			output_data["ParetoNTrees"].append(pareto_n_trees)
 			output_data["ParetoMaxTreeSize"].append(pareto_max_tree_size)
+
+			train_hv_value = HV(ref_point)(train_pareto_errors_size_of_this_gen)
+			test_hv_value = HV(ref_point)(test_pareto_errors_size_of_this_gen)
+
+			output_data['TrainHV'].append(train_hv_value)
+			output_data['TestHV'].append(test_hv_value)
+
 			all_pareto_fronts.append(pareto_front_of_this_gen)
 
 			if self.verbose:

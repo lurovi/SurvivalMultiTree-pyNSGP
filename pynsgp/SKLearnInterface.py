@@ -44,7 +44,8 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		verbose=False,
 		alpha=0.01,
 		n_iter=100,
-		l1_ratio=0.9
+		l1_ratio=0.9,
+		normalize=False
 		):
 
 		self.largest_value = 1e+8
@@ -71,7 +72,8 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 			size_proxy=self.size_metric,
 			alpha=self.alpha,
 			n_iter=self.n_iter,
-			l1_ratio=self.l1_ratio
+			l1_ratio=self.l1_ratio,
+			normalize=self.normalize
 		)
 
 		test_fitness_function = SurvivalRegressionFitness(
@@ -82,6 +84,7 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 			alpha=self.alpha,
 			n_iter=self.n_iter,
 			l1_ratio=self.l1_ratio,
+			normalize=self.normalize,
 			X_test=X_test,
 			y_test=y_test
 		)

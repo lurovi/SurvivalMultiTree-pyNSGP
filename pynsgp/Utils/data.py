@@ -10,6 +10,7 @@ def nsgp_path_string(
         base_path: str,
         method: str,
         dataset_name: str,
+        normalize: bool,
         test_size: float,
         pop_size: int,
         num_gen: int,
@@ -22,11 +23,11 @@ def nsgp_path_string(
         alpha: float,
         l1_ratio: float,
         max_iter: int
-):
+) -> str:
     return os.path.join(
         base_path,
         method.strip(),
-        dataset_name.strip() + '_' + str(test_size),
+        dataset_name.strip() + '_' + str(test_size) + '_' + 'normalize' + str(int(normalize)),
         f'pop{pop_size}_gen{num_gen}',
         f'maxsize{max_size}_mindepth{min_depth}_initmaxheight{init_max_height}_toursize{tournament_size}',
         f'mintrees{min_trees_init}_maxtrees{max_trees_init}_alpha{alpha}_l1{l1_ratio}_maxiter{max_iter}'
@@ -37,16 +38,17 @@ def cox_net_path_string(
         base_path: str,
         method: str,
         dataset_name: str,
+        normalize: bool,
         test_size: float,
         n_alphas: int,
         l1_ratio: float,
         alpha_min_ratio: float,
         max_iter: int
-):
+) -> str:
     return os.path.join(
         base_path,
         method.strip(),
-        dataset_name.strip() + '_' + str(test_size),
+        dataset_name.strip() + '_' + str(test_size) + '_' + 'normalize' + str(int(normalize)),
         f'nalphas{n_alphas}_alpharatio{alpha_min_ratio}_l1{l1_ratio}_maxiter{max_iter}'
     )
 
@@ -167,6 +169,93 @@ def _drop_correlated_cols(
         X = X.drop(col, axis=1)
 
     return X, col_transformer
+
+
+def simple_onehot_and_nan_drop(
+        X: pd.DataFrame,
+        y: np.ndarray,
+        col_transformer: None | Dict[str, Any] = None
+) -> tuple:
+
+    is_fitting = col_transformer is None
+
+    X.reset_index(drop=True, inplace=True)
+
+    # convert all "object" to "category"
+    for col in X.columns:
+        if X[col].dtype == "object":
+            X[col] = X[col].astype("category")
+        elif X[col].dtype == "numeric":
+            X[col] = X[col].astype("float64")
+
+    # drop rows with nans also in y
+    nan_rows = X.isna().any(axis=1)
+    X = X[~nan_rows]
+    y = y[~nan_rows]
+
+    # if col_transformer is None, then
+    # we must fit_transform, else we must transform
+    if col_transformer is None:
+        col_transformer = {}
+
+    for col in X.columns:
+        # if numerical, apply the numerical scaler
+        if X[col].dtype == "category":
+            # one-hot encode
+            if is_fitting:
+                onehot_encoder = OneHotEncoder(
+                    handle_unknown="ignore",
+                    sparse_output=False,
+                    drop=None, # 'if_binary'
+                )
+                onehot_encoder.fit(
+                    X[col].to_numpy().reshape(-1, 1),
+                )
+                col_transformer[col] = onehot_encoder
+
+            onehot_encoder = col_transformer[col]
+            oh_cols = pd.DataFrame(
+                onehot_encoder.transform(
+                    X[col].to_numpy().reshape(-1, 1),
+                ),
+                columns=[
+                    x.replace("x0", col + "_is")
+                    for x in onehot_encoder.get_feature_names_out()
+                ],
+                index=X.index,
+            )
+
+            X = X.drop(col, axis=1)
+            X = pd.concat(
+                [
+                    X,
+                    oh_cols,
+                ],
+                axis=1,
+            )
+        elif X[col].dtype == "bool":
+            # convert to 0 (False) and 1 (True)
+            X[col] = X[col].astype(float)
+
+        #elif X[col].dtype == "datetime64[ns]":
+        #    if is_fitting:
+        #        # convert to integers
+        #        min_date = X[col].min()
+        #        scaler = StandardScaler().fit(
+        #            (X[col] - min_date).dt.days.astype(int).to_numpy().reshape(-1, 1)
+        #        )
+        #        col_transformer[col] = {
+        #            "min_date": min_date,
+        #            "scaler": scaler,
+        #        }
+        #    min_date = col_transformer[col]["min_date"]
+        #    scaler = col_transformer[col]["scaler"]
+        #    # transform to int anyway
+        #    X[col] = X[col].dt.days.astype(int) - min_date
+        #    X[col] = scaler.transform(X[col].to_numpy().reshape(-1, 1))
+
+
+    return X, y, col_transformer
 
 
 def preproc_dataset(

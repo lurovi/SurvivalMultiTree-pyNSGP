@@ -32,6 +32,8 @@ if __name__ == '__main__':
                            help=f"The random seed.")
     arg_parser.add_argument("--dataset", type=str,
                             help=f"The dataset name.")
+    arg_parser.add_argument("--normalize", type=int,
+                            help=f"Whether or not normalize data when passing it to coxnet.")
     arg_parser.add_argument("--test_size", type=float,
                            help="Percentage of the dataset to use as test set.")
     arg_parser.add_argument("--config", type=str,
@@ -49,6 +51,8 @@ if __name__ == '__main__':
         raise AttributeError(f'Seed not provided.')
     if cmd_args.dataset is None:
         raise AttributeError(f'Dataset not provided.')
+    if cmd_args.normalize is None:
+        raise AttributeError(f'Normalize not provided.')
     if cmd_args.test_size is None:
         raise AttributeError(f'Test size not provided.')
     if cmd_args.config is None:
@@ -77,6 +81,7 @@ if __name__ == '__main__':
     method: str = cmd_args.method
     random_state: int = cmd_args.seed
     dataset_name: str = cmd_args.dataset
+    normalize: bool = True if cmd_args.normalize != 0 else False
     test_size: float = cmd_args.test_size
     config_file_with_params: str = cmd_args.config
 
@@ -86,7 +91,7 @@ if __name__ == '__main__':
         except yaml.YAMLError as exc:
             raise exc
 
-    run_string_descr: str = ','.join([method, str(random_state), dataset_name, str(test_size), config_file_with_params, str(int(verbose)), str(run_id)])
+    run_string_descr: str = ','.join([method, str(random_state), dataset_name, str(int(normalize)), str(test_size), config_file_with_params, str(int(verbose)), str(run_id)])
 
     try:
         if method == 'nsgp':
@@ -131,6 +136,7 @@ if __name__ == '__main__':
                 scale_numerical=scale_numerical,
                 random_state=random_state,
                 dataset_name=dataset_name,
+                normalize=normalize,
                 test_size=test_size,
                 pop_size=pop_size,
                 num_gen=num_gen,
@@ -159,6 +165,7 @@ if __name__ == '__main__':
                 scale_numerical=scale_numerical,
                 random_state=random_state,
                 dataset_name=dataset_name,
+                normalize=normalize,
                 test_size=test_size,
                 n_alphas=n_alphas,
                 l1_ratio=l1_ratio,

@@ -7,7 +7,7 @@ from pynsgp.Nodes.MultiTree import MultiTree
 
 class SurvivalRegressionFitness:
 
-    def __init__(self, X_train, y_train, metric, size_proxy, alpha, n_iter, l1_ratio, X_test=None, y_test=None):
+    def __init__(self, X_train, y_train, metric, size_proxy, alpha, n_iter, l1_ratio, normalize, X_test=None, y_test=None):
         possible_metrics = ('cindex', 'cindex_ipcw', 'mean_auc')
         possible_sizes = ('total_n_nodes', 'max_n_nodes', 'distinct_raw_features')
         if metric not in possible_metrics:
@@ -34,13 +34,19 @@ class SurvivalRegressionFitness:
         self.alpha = alpha
         self.n_iter = n_iter
         self.l1_ratio = l1_ratio
+        self.normalize = normalize
 
         self.elite = None
         self.evaluations = 0
 
-        self.lower, self.upper = np.percentile([y_i[1] for y_i in self.y_train], [5, 95])
-        self.times = np.arange(self.lower, self.upper)
-        self.tau = self.times[-1]
+        lower, upper = np.percentile([y_i[1] for y_i in self.y_train], [1, 99])
+        self.train_times = np.arange(lower, upper)
+        self.tau_train = self.train_times[-1]
+
+        if not self.is_training:
+            lower, upper = np.percentile([y_i[1] for y_i in self.y_test], [1, 99])
+            self.test_times = np.arange(lower, upper)
+            self.tau_test = self.test_times[-1]
 
         self.largest_value = 1e+8
         self.worst_fitness = 1e+12
@@ -73,7 +79,7 @@ class SurvivalRegressionFitness:
                 alphas=[self.alpha],
                 max_iter=self.n_iter,
                 l1_ratio=self.l1_ratio,
-                normalize=True,
+                normalize=self.normalize,
                 verbose=False,
                 fit_baseline_model=False
             )
@@ -108,21 +114,30 @@ class SurvivalRegressionFitness:
         error = np.nan
 
         if self.metric == 'cindex':
-            error = -1.0 * individual.cox.score(X=output, y=self.y_train if self.is_training else self.y_test)
+            try:
+                error = -1.0 * individual.cox.score(X=output, y=self.y_train if self.is_training else self.y_test)
+            except ValueError:
+                error = 0.0
         elif self.metric == 'cindex_ipcw':
-            error = -1.0 * concordance_index_ipcw(
-                survival_train=self.y_train,
-                survival_test=self.y_train if self.is_training else self.y_test,
-                estimate=risk_scores,
-                tau=self.tau
-            )[0]
+            try:
+                error = -1.0 * concordance_index_ipcw(
+                    survival_train=self.y_train,
+                    survival_test=self.y_train if self.is_training else self.y_test,
+                    estimate=risk_scores,
+                    tau=self.tau_train if self.is_training else self.tau_test
+                )[0]
+            except ValueError:
+                error = 0.0
         elif self.metric == 'mean_auc':
-            error = -1.0 * cumulative_dynamic_auc(
-                survival_train=self.y_train,
-                survival_test=self.y_train if self.is_training else self.y_test,
-                estimate=risk_scores,
-                times=self.times
-            )[1]
+            try:
+                error = -1.0 * cumulative_dynamic_auc(
+                    survival_train=self.y_train,
+                    survival_test=self.y_train if self.is_training else self.y_test,
+                    estimate=risk_scores,
+                    times=self.train_times if self.is_training else self.test_times
+                )[1]
+            except ValueError:
+                error = 0.0
         else:
             raise AttributeError(f"Unrecognized metric {self.metric}.")
         
