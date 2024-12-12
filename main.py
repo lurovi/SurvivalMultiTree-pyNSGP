@@ -91,7 +91,7 @@ if __name__ == '__main__':
         except yaml.YAMLError as exc:
             raise exc
 
-    run_string_descr: str = ','.join([method, str(random_state), dataset_name, str(int(normalize)), str(test_size), config_file_with_params, str(int(verbose)), str(run_id)])
+    run_string_descr: str = ','.join([method, str(random_state), dataset_name, str(int(normalize)), str(test_size), config_file_with_params, str(run_id), str(int(verbose))])
 
     try:
         if method == 'nsgp':

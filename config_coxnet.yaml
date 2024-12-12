@@ -1,4 +1,4 @@
 l1_ratio: 0.5
-n_alphas: 1000
+n_alphas: 10000
 alpha_min_ratio: 0.000001
 max_iter: 1000000
