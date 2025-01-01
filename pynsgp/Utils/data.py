@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from sksurv import datasets as sks_datasets
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.base import BaseEstimator, TransformerMixin
 import os
 
 
@@ -50,6 +51,22 @@ def cox_net_path_string(
         method.strip(),
         dataset_name.strip() + '_' + str(test_size) + '_' + 'normalize' + str(int(normalize)),
         f'nalphas{n_alphas}_alpharatio{alpha_min_ratio}_l1{l1_ratio}_maxiter{max_iter}'
+    )
+
+def survival_tree_path_string(
+        base_path: str,
+        method: str,
+        dataset_name: str,
+        normalize: bool,
+        test_size: float,
+        n_max_depths: int,
+        n_folds: int
+) -> str:
+    return os.path.join(
+        base_path,
+        method.strip(),
+        dataset_name.strip() + '_' + str(test_size) + '_' + 'normalize' + str(int(normalize)),
+        f'nmaxdepths{n_max_depths}_nfolds{n_folds}'
     )
 
 
@@ -171,13 +188,10 @@ def _drop_correlated_cols(
     return X, col_transformer
 
 
-def simple_onehot_and_nan_drop(
+def simple_basic_cast_and_nan_drop(
         X: pd.DataFrame,
         y: np.ndarray,
-        col_transformer: None | Dict[str, Any] = None
 ) -> tuple:
-
-    is_fitting = col_transformer is None
 
     X.reset_index(drop=True, inplace=True)
 
@@ -193,20 +207,36 @@ def simple_onehot_and_nan_drop(
     X = X[~nan_rows]
     y = y[~nan_rows]
 
+    for col in X.columns:
+        if X[col].dtype == "bool":
+            # convert to 0 (False) and 1 (True)
+            X[col] = X[col].astype(float)
+
+    return X, y
+
+
+def simple_onehot(
+        X: pd.DataFrame,
+        y: np.ndarray,
+        col_transformer: None | Dict[str, Any] = None
+) -> tuple:
+
+    is_fitting = col_transformer is None
+    X = X.copy(deep=True)
+
     # if col_transformer is None, then
     # we must fit_transform, else we must transform
     if col_transformer is None:
         col_transformer = {}
 
     for col in X.columns:
-        # if numerical, apply the numerical scaler
         if X[col].dtype == "category":
             # one-hot encode
             if is_fitting:
                 onehot_encoder = OneHotEncoder(
                     handle_unknown="ignore",
                     sparse_output=False,
-                    drop=None, # 'if_binary'
+                    drop=None,
                 )
                 onehot_encoder.fit(
                     X[col].to_numpy().reshape(-1, 1),
@@ -233,29 +263,112 @@ def simple_onehot_and_nan_drop(
                 ],
                 axis=1,
             )
-        elif X[col].dtype == "bool":
-            # convert to 0 (False) and 1 (True)
-            X[col] = X[col].astype(float)
 
-        #elif X[col].dtype == "datetime64[ns]":
-        #    if is_fitting:
-        #        # convert to integers
-        #        min_date = X[col].min()
-        #        scaler = StandardScaler().fit(
-        #            (X[col] - min_date).dt.days.astype(int).to_numpy().reshape(-1, 1)
-        #        )
-        #        col_transformer[col] = {
-        #            "min_date": min_date,
-        #            "scaler": scaler,
-        #        }
-        #    min_date = col_transformer[col]["min_date"]
-        #    scaler = col_transformer[col]["scaler"]
-        #    # transform to int anyway
-        #    X[col] = X[col].dt.days.astype(int) - min_date
-        #    X[col] = scaler.transform(X[col].to_numpy().reshape(-1, 1))
+    return X, y, col_transformer
+
+
+def simple_std_scaler_onehot(
+        X: pd.DataFrame,
+        y: np.ndarray,
+        col_transformer: None | Dict[str, Any] = None
+) -> tuple:
+
+    is_fitting = col_transformer is None
+    X = X.copy(deep=True)
+
+    # if col_transformer is None, then
+    # we must fit_transform, else we must transform
+    if col_transformer is None:
+        col_transformer = {}
+
+    for col in X.columns:
+        # if numerical, apply the numerical scaler
+        if X[col].dtype in ["float64", "int64"]:
+            if is_fitting:
+                col_transformer[col] = StandardScaler().fit(
+                    X[col].to_numpy().reshape(-1, 1)
+                )
+
+            numerical_scaler = col_transformer[col]
+            X.loc[:, col] = numerical_scaler.transform(
+                X[col].to_numpy().reshape(-1, 1)
+            )
+        elif X[col].dtype == "category":
+            # one-hot encode
+            if is_fitting:
+                onehot_encoder = OneHotEncoder(
+                    handle_unknown="ignore",
+                    sparse_output=False,
+                    drop=None,
+                )
+                onehot_encoder.fit(
+                    X[col].to_numpy().reshape(-1, 1),
+                )
+                col_transformer[col] = onehot_encoder
+
+            onehot_encoder = col_transformer[col]
+            oh_cols = pd.DataFrame(
+                onehot_encoder.transform(
+                    X[col].to_numpy().reshape(-1, 1),
+                ),
+                columns=[
+                    x.replace("x0", col + "_is")
+                    for x in onehot_encoder.get_feature_names_out()
+                ],
+                index=X.index,
+            )
+
+            X = X.drop(col, axis=1)
+            X = pd.concat(
+                [
+                    X,
+                    oh_cols,
+                ],
+                axis=1,
+            )
+        elif X[col].dtype == "datetime64[ns]":
+            if is_fitting:
+                # convert to integers
+                min_date = X[col].min()
+                scaler = StandardScaler().fit(
+                    (X[col] - min_date).dt.days.astype(int).to_numpy().reshape(-1, 1)
+                )
+                col_transformer[col] = {
+                    "min_date": min_date,
+                    "scaler": scaler,
+                }
+            min_date = col_transformer[col]["min_date"]
+            scaler = col_transformer[col]["scaler"]
+            # transform to int anyway
+            X[col] = X[col].dt.days.astype(int) - min_date
+            X[col] = scaler.transform(X[col].to_numpy().reshape(-1, 1))
 
 
     return X, y, col_transformer
+
+
+class SimpleStdScalerOneHot(BaseEstimator, TransformerMixin):
+    def __init__(self, normalize):
+        self.normalize = normalize
+        self.col_transformer = None
+
+    def fit(self, X, y=None):
+        self.col_transformer = {}
+        if self.normalize:
+            _, _, col_transformer = simple_std_scaler_onehot(X, y)
+        else:
+            _, _, col_transformer = simple_onehot(X, y)
+        self.col_transformer = col_transformer
+        return self
+
+    def transform(self, X, y=None):
+        if self.col_transformer is None or len(self.col_transformer) == 0:
+            raise ValueError(f'col_transformer not created.')
+        if self.normalize:
+            X, _, _ = simple_std_scaler_onehot(X, y, self.col_transformer)
+        else:
+            X, _, _ = simple_onehot(X, y, self.col_transformer)
+        return X.to_numpy()
 
 
 def preproc_dataset(

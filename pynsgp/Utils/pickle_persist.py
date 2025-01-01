@@ -1,5 +1,6 @@
 import bz2
 import pickle
+import dill
 import _pickle as cPickle
 
 
@@ -38,3 +39,17 @@ def decompress_pickle(file):
     data = bz2.BZ2File(file, 'rb')
     return cPickle.load(data)
 
+# Save data using dill and compress it into a file
+# `title` is the path of the filename to create without extension
+# `data` is what you want to make persistent
+# This method creates a new file from scratch but does not create new folders.
+# Ensure all directories in the path already exist.
+def compress_dill(title, data):
+    with bz2.BZ2File(title + '.pbz2', 'w') as f:
+        dill.dump(data, f)
+
+# Load any compressed dill file
+# `file` is the path of the file to load, including the extension
+def decompress_dill(file):
+    with bz2.BZ2File(file, 'rb') as f:
+        return dill.load(f)

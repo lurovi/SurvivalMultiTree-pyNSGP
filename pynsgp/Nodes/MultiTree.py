@@ -3,6 +3,8 @@ from typing import List
 from genepro.node_impl import Feature, OOHRdyFeature, InstantiableConstant, Constant
 
 import numpy as np
+from sympy import simplify, latex
+from sympy.parsing.sympy_parser import parse_expr
 
 
 class MultiTree:
@@ -31,6 +33,21 @@ class MultiTree:
     def __len__(self) -> int:
         lengths = [len(self.trees[tree_index]) for tree_index in self.actual_trees_indices]
         return max(lengths)
+
+    def latex_expression(self, round_precision: int = 3, perform_simplification: bool = True) -> str:
+        strings_representations = [self.trees[tree_index].get_readable_repr() for tree_index in self.actual_trees_indices]
+        strings_representations = [str(simplify(parse_expr(formula.replace('^', '**'), evaluate=True))) for formula in strings_representations]
+        actual_coefficients = [str(self.coefficients[tree_index]) for tree_index in self.actual_trees_indices]
+        strings_representations = ['(' + actual_coefficients[i] + ')' + '*(' + strings_representations[i] +')' for i in range(len(strings_representations))]
+        strings_representations.append('(' + str(self.offset) + ')')
+        original_formula = '+'.join(strings_representations)
+        if perform_simplification:
+            formula = simplify(parse_expr(original_formula.replace('^', '**'), evaluate=True))
+        else:
+            formula = parse_expr(original_formula.replace('^', '**'), evaluate=True)
+        formula = formula.xreplace({n: round(float(n), round_precision) for n in formula.atoms() if n.is_Float})
+        formula = latex(formula)
+        return formula
 
     def get_readable_repr(self) -> str:
         return str(self)

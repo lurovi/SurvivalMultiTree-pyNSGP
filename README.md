@@ -8,7 +8,7 @@ This code runs on Ubuntu and it uses Python as coding language.
 Open the terminal and type the following commands:
 
 ```bash
-git clone -b v1.6.1 https://github.com/giorgia-nadizar/genepro.git
+git clone -b v1.6.2 https://github.com/giorgia-nadizar/genepro.git
 git clone https://github.com/lurovi/SurvivalMultiTree-pyNSGP.git
 cd SurvivalMultiTree-pyNSGP
 conda env create -f environment.yml

@@ -49,7 +49,7 @@ class SurvivalRegressionFitness:
             self.tau_test = self.test_times[-1]
 
         self.largest_value = 1e+8
-        self.worst_fitness = 1e+12
+        self.worst_fitness = 0.0
 
     def Evaluate(self, individual):
         self.evaluations = self.evaluations + 1
@@ -117,7 +117,7 @@ class SurvivalRegressionFitness:
             try:
                 error = -1.0 * individual.cox.score(X=output, y=self.y_train if self.is_training else self.y_test)
             except ValueError:
-                error = 0.0
+                error = float(self.worst_fitness)
         elif self.metric == 'cindex_ipcw':
             try:
                 error = -1.0 * concordance_index_ipcw(
@@ -127,7 +127,7 @@ class SurvivalRegressionFitness:
                     tau=self.tau_train if self.is_training else self.tau_test
                 )[0]
             except ValueError:
-                error = 0.0
+                error = float(self.worst_fitness)
         elif self.metric == 'mean_auc':
             try:
                 error = -1.0 * cumulative_dynamic_auc(
@@ -137,12 +137,12 @@ class SurvivalRegressionFitness:
                     times=self.train_times if self.is_training else self.test_times
                 )[1]
             except ValueError:
-                error = 0.0
+                error = float(self.worst_fitness)
         else:
             raise AttributeError(f"Unrecognized metric {self.metric}.")
         
         if np.isnan(error):
-            error = self.worst_fitness
+            error = float(self.worst_fitness)
 
         if float(error) > float(self.worst_fitness):
             error = self.worst_fitness

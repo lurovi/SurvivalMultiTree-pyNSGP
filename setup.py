@@ -5,8 +5,8 @@ with open('README.md', 'r') as fh:
 
 
 setuptools.setup(
-    name='SurvivalMultiTree-pyNSGP',
-    version='1.2.0',
+    name='pynsgp',
+    version='1.3.0',
     author='Marco Virgolin',
     author_email='marco.virgolin@gmail.com',
     url='https://github.com/lurovi/SurvivalMultiTree-pyNSGP',
