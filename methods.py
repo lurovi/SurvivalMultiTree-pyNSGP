@@ -1,7 +1,6 @@
 import os.path
 import time
 
-import joblib
 import pandas as pd
 from sklearn.pipeline import Pipeline
 from sksurv.metrics import concordance_index_ipcw, as_concordance_index_ipcw_scorer
@@ -9,26 +8,33 @@ from pymoo.indicators.hv import HV
 
 from pynsgp.Utils.pickle_persist import compress_pickle, compress_dill
 from pynsgp.Utils.data import load_dataset, cox_net_path_string, nsgp_path_string, simple_onehot, \
-    simple_basic_cast_and_nan_drop, SimpleStdScalerOneHot, survival_tree_path_string
+    simple_basic_cast_and_nan_drop, SimpleStdScalerOneHot, survival_ensemble_tree_path_string
 from sklearn.model_selection import train_test_split
 from genepro.node_impl import *
-from sksurv.linear_model import CoxPHSurvivalAnalysis, CoxnetSurvivalAnalysis, IPCRidge
+from sksurv.linear_model import CoxnetSurvivalAnalysis
 from sksurv.tree import SurvivalTree
 from sksurv.ensemble import GradientBoostingSurvivalAnalysis, RandomSurvivalForest
-from sklearn.experimental import enable_halving_search_cv
 from sklearn.model_selection import (
     GridSearchCV,
-    HalvingGridSearchCV,
     StratifiedKFold,
 )
-from pynsgp.Utils.sksurv_util import hyperparam_tuning, tune_coxnet
 from pynsgp.SKLearnInterface import pyNSGPEstimator as NSGP
 import numpy as np
 import random
 
 
-def get_num_distinct_features_from_gridsearch_cv_survival_tree_with_cindex_ipcw(gcv):
-    return len([val for val in sorted(list(set(gcv.best_estimator_['model'].estimator.tree_.feature.tolist()))) if val >= 0])
+def get_num_distinct_features_from_gridsearch_cv_survival_ensemble_tree_with_cindex_ipcw(gcv, is_an_ensemble):
+    if not is_an_ensemble:
+        return len([val for val in sorted(list(set(gcv.best_estimator_['model'].estimator.tree_.feature.tolist()))) if val >= 0])
+    else:
+        all_features = set()
+        all_estimators = gcv.best_estimator_['model'].estimator.estimators_
+        if isinstance(all_estimators, np.ndarray):
+            all_estimators = all_estimators.reshape(1, -1).flatten()
+        for i in range(len(all_estimators)):
+            single_estimator = all_estimators[i]
+            all_features.update(set([val for val in list(set(single_estimator.tree_.feature.tolist())) if val >= 0]))
+        return len(all_features)
 
 
 def get_coxnet_at_k_coefs(cox: CoxnetSurvivalAnalysis, k: int) -> tuple | None:
@@ -103,8 +109,9 @@ def load_preprocess_data(
     return X_train.to_numpy(), X_test.to_numpy(), y_train, y_test
 
 
-def run_survival_tree(
+def run_survival_ensemble_tree(
     results_path,
+    method,
     corr_drop_threshold,
     scale_numerical,
     random_state,
@@ -115,9 +122,11 @@ def run_survival_tree(
     n_folds,
     verbose
 ) -> None:
-    final_path = survival_tree_path_string(
+    if method not in ('survivaltree', 'gradientboost', 'randomforest'):
+        raise ValueError(f'Method {method} not recognized for survival ensemble tree.')
+    final_path = survival_ensemble_tree_path_string(
         base_path=results_path,
-        method='survivaltree',
+        method=method,
         dataset_name=dataset_name,
         normalize=normalize,
         test_size=test_size,
@@ -156,12 +165,33 @@ def run_survival_tree(
     test_times = np.arange(lower, upper)
     tau_test = test_times[-1]
 
-    param_grid = {
+    param_grid_survival_tree = {
         "model__estimator__min_samples_split": [2, 5, 8],
         "model__estimator__min_samples_leaf": [1, 4],
         "model__estimator__max_features": [0.5, 1.0],
         "model__estimator__splitter": ["best", "random"],
     }
+
+    param_grid_gradient_boost  = {
+        "model__estimator__loss": ["coxph", "ipcwls"],
+        "model__estimator__learning_rate": [0.1, 0.01],
+        "model__estimator__n_estimators": [50, 250],
+        "model__estimator__min_samples_split": [2, 5, 8],
+        "model__estimator__min_samples_leaf": [1, 4],
+    }
+
+    param_grid_random_forest = {
+        "model__estimator__n_estimators": [100, 500],
+        "model__estimator__min_samples_split": [2, 5, 8],
+        "model__estimator__min_samples_leaf": [1, 4],
+    }
+
+    if n_max_depths <= 0:
+        n_max_depths = 0
+        a_grid_of_different_max_depths = [3, 6, 9, 15, 21, 27, 30, 60]
+        param_grid_survival_tree['model__estimator__max_depth'] = a_grid_of_different_max_depths
+        param_grid_gradient_boost['model__estimator__max_depth'] = a_grid_of_different_max_depths
+        param_grid_random_forest['model__estimator__max_depth'] = a_grid_of_different_max_depths
 
     output_data = {"DistinctRawFeatures": [], "MaxDepth": [], "TrainError": [], "TestError": [],
                    "TrainHV": [], "TestHV": [],
@@ -172,19 +202,35 @@ def run_survival_tree(
     cv_results = {}
     n_distinct_features_dict = {}
     start_time = time.time()
-    for i in range(1, n_max_depths + 1):
+    for i in range(min(n_max_depths, 1), n_max_depths + 1):
         folds = StratifiedKFold(
             n_splits=n_folds, shuffle=True,
             random_state=random_state + 50,
         ).split(X_train, [y_i[0] for y_i in y_train])
 
+        if method == 'survivaltree':
+            param_grid = param_grid_survival_tree
+            if n_max_depths == 0:
+                model = SurvivalTree(random_state=random_state)
+            else:
+                model = SurvivalTree(max_depth=i, random_state=random_state)
+        elif method == 'gradientboost':
+            param_grid = param_grid_gradient_boost
+            if n_max_depths == 0:
+                model = GradientBoostingSurvivalAnalysis(random_state=random_state)
+            else:
+                model = GradientBoostingSurvivalAnalysis(max_depth=i, random_state=random_state)
+        elif method == 'randomforest':
+            param_grid = param_grid_random_forest
+            if n_max_depths == 0:
+                model = RandomSurvivalForest(random_state=random_state)
+            else:
+                model = RandomSurvivalForest(max_depth=i, random_state=random_state)
+
         pipelines[i] = Pipeline(
             steps=[
                 ('scaler', SimpleStdScalerOneHot(normalize=normalize)),
-                ('model', as_concordance_index_ipcw_scorer(
-                    SurvivalTree(max_depth=i, random_state=random_state), tau=tau_train
-                    )
-                 )
+                ('model', as_concordance_index_ipcw_scorer(model, tau=tau_train))
             ]
         )
 
@@ -199,14 +245,14 @@ def run_survival_tree(
         ).fit(X_train, y_train)
 
         estimators[i] = gcv
-        n_distinct_features = get_num_distinct_features_from_gridsearch_cv_survival_tree_with_cindex_ipcw(gcv)
+        n_distinct_features = get_num_distinct_features_from_gridsearch_cv_survival_ensemble_tree_with_cindex_ipcw(gcv, method in ('gradientboost', 'randomforest'))
         n_distinct_features_dict[i] = n_distinct_features
         cv_results[i] = {'best_index': gcv.best_index_, 'best_params': gcv.best_params_, 'best_score': gcv.best_score_, 'cv_results': gcv.cv_results_}
 
     end_time = time.time()
     training_time = end_time - start_time
 
-    for i in range(1, n_max_depths + 1):
+    for i in range(min(n_max_depths, 1), n_max_depths + 1):
         if n_distinct_features_dict[i] in output_data["DistinctRawFeatures"]:
             continue
         output_data["TrainTime"].append(training_time)

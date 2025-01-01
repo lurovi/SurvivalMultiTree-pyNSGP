@@ -21,7 +21,8 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
-from methods import run_evolution, run_cox_net, run_survival_tree
+from methods import run_evolution, run_cox_net, run_survival_ensemble_tree
+
 
 if __name__ == '__main__':
     arg_parser: ArgumentParser = ArgumentParser(description="SurvivalMultiTree-pyNSGP arguments.")
@@ -173,13 +174,14 @@ if __name__ == '__main__':
                 verbose=verbose
             )
 
-        elif method == 'survivaltree':
+        elif method in ('survivaltree', 'gradientboost', 'randomforest'):
 
             n_max_depths: int = config_dict['n_max_depths']
             n_folds: int = config_dict['n_folds']
 
-            run_survival_tree(
+            run_survival_ensemble_tree(
                  results_path=results_path,
+                 method=method,
                  corr_drop_threshold=corr_drop_threshold,
                  scale_numerical=scale_numerical,
                  random_state=random_state,

@@ -10,7 +10,7 @@ import os
 
 from pymoo.indicators.hv import HV
 from pynsgp.Utils.pickle_persist import decompress_pickle, decompress_dill
-from pynsgp.Utils.data import load_dataset, nsgp_path_string, cox_net_path_string, survival_tree_path_string
+from pynsgp.Utils.data import load_dataset, nsgp_path_string, cox_net_path_string, survival_ensemble_tree_path_string
 from pynsgp.Utils.stats import is_mannwhitneyu_passed, is_kruskalwallis_passed, perform_mannwhitneyu_holm_bonferroni
 
 import warnings
@@ -128,7 +128,7 @@ def read_coxnet(
     return data, model
 
 
-def read_survivaltree(
+def read_survivalensembletree(
     base_path: str,
     method: str,
     dataset_name: str,
@@ -138,7 +138,7 @@ def read_survivaltree(
     n_folds: int,
     seed: int
 ):
-    path = survival_tree_path_string(
+    path = survival_ensemble_tree_path_string(
         base_path=base_path,
         method=method,
         dataset_name=dataset_name,
@@ -449,8 +449,12 @@ def stat_test(
         alpha,
         l1_ratio_nsgp,
         max_iter_nsgp,
-        n_max_depths,
+        n_max_depths_st,
         n_folds_st,
+        n_max_depths_gb,
+        n_folds_gb,
+        n_max_depths_rf,
+        n_folds_rf,
         how_many_pareto_features_table,
         methods,
 ):
@@ -533,13 +537,13 @@ def stat_test(
                                 n_features_list = list(csv_data['DistinctRawFeatures'])
                                 errors_list = list(csv_data[split_type + 'Error'])
                             elif method == 'survivaltree':
-                                csv_data, _ = read_survivaltree(
+                                csv_data, _ = read_survivalensembletree(
                                     base_path=base_path,
                                     method=method,
                                     dataset_name=dataset_name,
                                     normalize=normalize,
                                     test_size=test_size,
-                                    n_max_depths=n_max_depths,
+                                    n_max_depths=n_max_depths_st,
                                     n_folds=n_folds_st,
                                     seed=seed
                                 )
@@ -866,9 +870,21 @@ def main():
         except yaml.YAMLError as exc:
             raise exc
 
-    #with open(os.path.join(base_path, 'config_survivaltree.yaml'), 'r') as yaml_file:
+    # with open(os.path.join(base_path, 'config_survivaltree.yaml'), 'r') as yaml_file:
+    #     try:
+    #         survivaltree_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
+    #     except yaml.YAMLError as exc:
+    #         raise exc
+
+    # with open(os.path.join(base_path, 'config_gradientboost.yaml'), 'r') as yaml_file:
     #    try:
-    #        survivaltree_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
+    #        gradientboost_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
+    #    except yaml.YAMLError as exc:
+    #        raise exc
+
+    # with open(os.path.join(base_path, 'config_randomforest.yaml'), 'r') as yaml_file:
+    #    try:
+    #        randomforest_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
     #    except yaml.YAMLError as exc:
     #        raise exc
 
@@ -891,8 +907,14 @@ def main():
     alpha_min_ratio: float = coxnet_config_dict['alpha_min_ratio']
     max_iter: int = coxnet_config_dict['max_iter']
 
-    #n_max_depths: int = survivaltree_config_dict['n_max_depths']
-    #n_folds_st: int = survivaltree_config_dict['n_folds']
+    # n_max_depths_st: int = survivaltree_config_dict['n_max_depths']
+    # n_folds_st: int = survivaltree_config_dict['n_folds']
+
+    # n_max_depths_gb: int = gradientboost_config_dict['n_max_depths']
+    # n_folds_gb: int = gradientboost_config_dict['n_folds']
+
+    # n_max_depths_rf: int = randomforest_config_dict['n_max_depths']
+    # n_folds_rf: int = randomforest_config_dict['n_folds']
 
     split_types: list[str] = ['Train', 'Test']
     dataset_names: list[str] = ['pbc2', 'support2', 'framingham', 'breast_cancer_metabric', 'breast_cancer_metabric_relapse']
@@ -985,8 +1007,12 @@ def main():
     #     alpha=alpha,
     #     l1_ratio_nsgp=l1_ratio_nsgp,
     #     max_iter_nsgp=max_iter_nsgp,
-    #     n_max_depths=n_max_depths,
+    #     n_max_depths_st=n_max_depths_st,
     #     n_folds_st=n_folds_st,
+    #     n_max_depths_gb=n_max_depths_gb,
+    #     n_folds_gb=n_folds_gb,
+    #     n_max_depths_rf=n_max_depths_rf,
+    #     n_folds_rf=n_folds_rf,
     #     how_many_pareto_features_table=[1, 2, 3, 4, 5, 1000],
     #     methods=['coxnet', 'nsgp'],
     # )

@@ -53,7 +53,8 @@ def cox_net_path_string(
         f'nalphas{n_alphas}_alpharatio{alpha_min_ratio}_l1{l1_ratio}_maxiter{max_iter}'
     )
 
-def survival_tree_path_string(
+
+def survival_ensemble_tree_path_string(
         base_path: str,
         method: str,
         dataset_name: str,
