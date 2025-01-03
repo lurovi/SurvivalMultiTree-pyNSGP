@@ -77,6 +77,8 @@ class pyNSGP:
 		self.partition_features = partition_features
 		self.min_trees_init = min_trees_init
 		self.max_trees_init = max_trees_init
+
+		self.random_search = self.max_generations == 1
 	
 
 	def __ShouldTerminate(self):
@@ -148,69 +150,85 @@ class pyNSGP:
 			all_obj2 = []
 
 			start_gen_time = time.time()
-			selected = Selection.TournamentSelect(self.population, self.pop_size, tournament_size=self.tournament_size)
+
+			if not self.random_search:
+				selected = Selection.TournamentSelect(self.population, self.pop_size, tournament_size=self.tournament_size)
 
 			O = []
 			for i in range(self.pop_size):
-				o = deepcopy(selected[i])
-				o = Variation.GenerateOffspringMultitree(
-					parent_mt=o,
-					crossovers=self.crossovers,
-					mutations=self.mutations,
-					coeff_opts=self.coeff_opts,
-					donors=selected,
-					internal_nodes=self.functions,
-					leaf_nodes=self.terminals,
-					max_depth=self.initialization_max_tree_height,
-					X_train=self.X_train,
-					constraints= {"max_tree_size": self.max_tree_size},
-					partition_features=self.partition_features,
-					prob_delete_tree=self.prob_delete_tree,
-					prob_init_tree=self.prob_init_tree,
-					prob_mt_crossover=self.prob_mt_crossover,
-					perform_only_one_op=True
-				)
-
-				for single_int_tree_index in range(o.number_of_trees() - 1, -1, -1):
-					single_internal_tree = o.trees[single_int_tree_index]
-					if (len(single_internal_tree.get_subtree()) > self.max_tree_size) or (single_internal_tree.get_height() < self.min_depth):
-						del o.trees[single_int_tree_index]
-
-				if o.number_of_trees() == 0:
+				if not self.random_search:
 					o = deepcopy(selected[i])
+					o = Variation.GenerateOffspringMultitree(
+						parent_mt=o,
+						crossovers=self.crossovers,
+						mutations=self.mutations,
+						coeff_opts=self.coeff_opts,
+						donors=selected,
+						internal_nodes=self.functions,
+						leaf_nodes=self.terminals,
+						max_depth=self.initialization_max_tree_height,
+						X_train=self.X_train,
+						constraints= {"max_tree_size": self.max_tree_size},
+						partition_features=self.partition_features,
+						prob_delete_tree=self.prob_delete_tree,
+						prob_init_tree=self.prob_init_tree,
+						prob_mt_crossover=self.prob_mt_crossover,
+						perform_only_one_op=True
+					)
+
+					for single_int_tree_index in range(o.number_of_trees() - 1, -1, -1):
+						single_internal_tree = o.trees[single_int_tree_index]
+						if (len(single_internal_tree.get_subtree()) > self.max_tree_size) or (single_internal_tree.get_height() < self.min_depth):
+							del o.trees[single_int_tree_index]
+
+					if o.number_of_trees() == 0:
+						o = deepcopy(selected[i])
+					else:
+						self.fitness_function.Evaluate(o)
+
+					O.append(o)
+					all_train_obj1.append(o.objectives[0])
+					all_obj2.append(o.objectives[1])
 				else:
-					self.fitness_function.Evaluate(o)
+					o = self.population[i]
 
-				O.append(o)
-				all_train_obj1.append(o.objectives[0])
-				all_obj2.append(o.objectives[1])
+					O.append(o)
+					all_train_obj1.append(o.objectives[0])
+					all_obj2.append(o.objectives[1])
 
-			PO = self.population+O
-			
+
+			if not self.random_search:
+				PO = self.population+O
+			else:
+				PO = O
+
 			new_population = []
 			fronts = self.FastNonDominatedSorting(PO)
 			self.latest_front = deepcopy(fronts[0])
 
 			curr_front_idx = 0
-			while curr_front_idx < len(fronts) and len(fronts[curr_front_idx]) + len(new_population) <= self.pop_size:
-				self.ComputeCrowdingDistances( fronts[curr_front_idx] )
-				for p in fronts[curr_front_idx]:
-					new_population.append(p)
-				curr_front_idx += 1
 
-			if len(new_population) < self.pop_size:
-				# fill in remaining
-				self.ComputeCrowdingDistances( fronts[curr_front_idx] )
-				fronts[curr_front_idx].sort(key=lambda x: x.crowding_distance, reverse=True) 
+			if not self.random_search:
 
-				while len(fronts[curr_front_idx]) > 0 and len(new_population) < self.pop_size:
-					# pop first because they were sorted in desc order
-					new_population.append( fronts[curr_front_idx][0] )
-					fronts[curr_front_idx].pop(0)
+				while curr_front_idx < len(fronts) and len(fronts[curr_front_idx]) + len(new_population) <= self.pop_size:
+					self.ComputeCrowdingDistances( fronts[curr_front_idx] )
+					for p in fronts[curr_front_idx]:
+						new_population.append(p)
+					curr_front_idx += 1
 
-				# clean up leftovers
-				while len(fronts[curr_front_idx]) > 0:
-					del fronts[curr_front_idx][0]
+				if len(new_population) < self.pop_size:
+					# fill in remaining
+					self.ComputeCrowdingDistances( fronts[curr_front_idx] )
+					fronts[curr_front_idx].sort(key=lambda x: x.crowding_distance, reverse=True)
+
+					while len(fronts[curr_front_idx]) > 0 and len(new_population) < self.pop_size:
+						# pop first because they were sorted in desc order
+						new_population.append( fronts[curr_front_idx][0] )
+						fronts[curr_front_idx].pop(0)
+
+					# clean up leftovers
+					while len(fronts[curr_front_idx]) > 0:
+						del fronts[curr_front_idx][0]
 
 			self.population = new_population
 

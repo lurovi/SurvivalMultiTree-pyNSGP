@@ -10,7 +10,8 @@ import os
 
 from pymoo.indicators.hv import HV
 from pynsgp.Utils.pickle_persist import decompress_pickle, decompress_dill
-from pynsgp.Utils.data import load_dataset, nsgp_path_string, cox_net_path_string, survival_ensemble_tree_path_string
+from pynsgp.Utils.data import load_dataset, nsgp_path_string, cox_net_path_string, survival_ensemble_tree_path_string, \
+    simple_basic_cast_and_nan_drop
 from pynsgp.Utils.stats import is_mannwhitneyu_passed, is_kruskalwallis_passed, perform_mannwhitneyu_holm_bonferroni
 
 import warnings
@@ -294,8 +295,10 @@ def stat_test_print(
         for normalize in normalizes:
             values_for_omnibus_test[str(normalize)] = []
             for dataset_name in dataset_names:
-                X, _ = load_dataset(dataset_name)
-                n_features = X.shape[1]
+                X, y = load_dataset(dataset_name)
+                X, y = simple_basic_cast_and_nan_drop(X, y)
+
+                n_features = 100 # X.shape[1]
                 ref_point = np.array([0.0, n_features])
                 cox_hv_values = []
                 nsgp_hv_values = []
@@ -470,6 +473,8 @@ def stat_test(
         'Test': {'HV': {}, 'CI': {}},
     }
 
+    opaque_methods = ('gradientboost', 'randomforest')
+
     for split_type in ['Train', 'Test']:
         for k in how_many_pareto_features_table:
 
@@ -504,8 +509,9 @@ def stat_test(
                     if dataset_name not in comparisons[split_type]['CI'][k][normalize]:
                         comparisons[split_type]['CI'][k][normalize][dataset_name] = {}
 
-                    X, _ = load_dataset(dataset_name)
-                    n_features = X.shape[1]
+                    X, y = load_dataset(dataset_name)
+                    X, y = simple_basic_cast_and_nan_drop(X, y)
+                    n_features = 100 # X.shape[1]
                     ref_point = np.array([0.0, n_features])
 
                     for method in methods:
@@ -550,6 +556,34 @@ def stat_test(
 
                                 n_features_list = list(csv_data['DistinctRawFeatures'])
                                 errors_list = list(csv_data[split_type + 'Error'])
+                            elif method == 'gradientboost':
+                                csv_data, _ = read_survivalensembletree(
+                                    base_path=base_path,
+                                    method=method,
+                                    dataset_name=dataset_name,
+                                    normalize=normalize,
+                                    test_size=test_size,
+                                    n_max_depths=n_max_depths_gb,
+                                    n_folds=n_folds_gb,
+                                    seed=seed
+                                )
+
+                                n_features_list = list(csv_data['DistinctRawFeatures'])
+                                errors_list = list(csv_data[split_type + 'Error'])
+                            elif method == 'randomforest':
+                                csv_data, _ = read_survivalensembletree(
+                                    base_path=base_path,
+                                    method=method,
+                                    dataset_name=dataset_name,
+                                    normalize=normalize,
+                                    test_size=test_size,
+                                    n_max_depths=n_max_depths_rf,
+                                    n_folds=n_folds_rf,
+                                    seed=seed
+                                )
+
+                                n_features_list = list(csv_data['DistinctRawFeatures'])
+                                errors_list = list(csv_data[split_type + 'Error'])
                             elif method == 'nsgp':
                                 csv_data, _ = read_nsgp(
                                     base_path=base_path,
@@ -574,10 +608,34 @@ def stat_test(
 
                                 n_features_list = [float(val) for val in csv_data.loc[num_gen - 1, 'ParetoObj2'].split(' ')]
                                 errors_list = [float(val) for val in csv_data.loc[num_gen - 1, split_type + 'ParetoObj1'].split(' ')]
+                            elif method == 'randomsearch':
+                                csv_data, _ = read_nsgp(
+                                    base_path=base_path,
+                                    method=method,
+                                    dataset_name=dataset_name,
+                                    normalize=normalize,
+                                    test_size=test_size,
+                                    pop_size=pop_size * num_gen,
+                                    num_gen=1,
+                                    max_size=max_size,
+                                    min_depth=min_depth,
+                                    init_max_height=init_max_height,
+                                    tournament_size=tournament_size,
+                                    min_trees_init=min_trees_init,
+                                    max_trees_init=max_trees_init,
+                                    alpha=alpha,
+                                    l1_ratio=l1_ratio_nsgp,
+                                    max_iter=max_iter_nsgp,
+                                    seed=seed,
+                                    load_pareto=False
+                                )
+
+                                n_features_list = [float(val) for val in csv_data.loc[num_gen - 1, 'ParetoObj2'].split(' ')]
+                                errors_list = [float(val) for val in csv_data.loc[num_gen - 1, split_type + 'ParetoObj1'].split(' ')]
                             else:
                                 raise ValueError(f'Unrecognized method {method}.')
 
-                            compared_c_indexes = [-temp_error for temp_error, temp_feats in zip(errors_list, n_features_list) if temp_feats == (k if k < 1000 else max(n_features_list))]
+                            compared_c_indexes = [-temp_error for temp_error, temp_feats in zip(errors_list, n_features_list) if temp_feats == (k if k < 1000 and method not in opaque_methods else max(n_features_list))]
                             if len(compared_c_indexes) == 0:
                                 compared_c_indexes = [0.0]
                             compared_c_index = compared_c_indexes[0]
@@ -675,6 +733,7 @@ def print_table_hv_ci(
 
 def lineplot(
         base_path,
+        data,
         test_size,
         normalize,
         dataset_names,
@@ -693,82 +752,96 @@ def lineplot(
         dataset_acronyms,
         how_many_pareto_features,
 ) -> None:
-    #dataset k split_type+aggregation+metric values_for_each_generation
-    data = {
-        dataset_name: {
-            k: {
-                'TrainMedianHV': [], 'TrainQ1HV': [], 'TrainQ3HV': [],
-                'TestMedianHV': [], 'TestQ1HV': [], 'TestQ3HV': []
+    if data is None or len(data) == 0:
+
+        #dataset k split_type+aggregation+metric values_for_each_generation
+        data = {
+            dataset_name: {
+                str(k): {
+                    'TrainMedianHV': [], 'TrainQ1HV': [], 'TrainQ3HV': [],
+                    'TestMedianHV': [], 'TestQ1HV': [], 'TestQ3HV': []
+                }
+                for k in how_many_pareto_features
             }
-            for k in how_many_pareto_features
+            for dataset_name in dataset_names
         }
-        for dataset_name in dataset_names
-    }
 
-    for k in how_many_pareto_features:
-        for dataset_name in dataset_names:
+        highest_n_features_ever_found = 0
 
-            X, _ = load_dataset(dataset_name)
-            n_features = X.shape[1]
-            ref_point = np.array([0.0, n_features])
+        for k in how_many_pareto_features:
+            print(k)
+            for dataset_name in dataset_names:
+                print(dataset_name)
+                X, y = load_dataset(dataset_name)
+                X, y = simple_basic_cast_and_nan_drop(X, y)
+                n_features = 100 # X.shape[1]
+                ref_point = np.array([0.0, n_features])
 
-            train_single_values = []
-            test_single_values = []
-            for seed in seed_range:
-                csv_data, _ = read_nsgp(
-                    base_path=base_path,
-                    method='nsgp',
-                    dataset_name=dataset_name,
-                    normalize=normalize,
-                    test_size=test_size,
-                    pop_size=pop_size,
-                    num_gen=num_gen,
-                    max_size=max_size,
-                    min_depth=min_depth,
-                    init_max_height=init_max_height,
-                    tournament_size=tournament_size,
-                    min_trees_init=min_trees_init,
-                    max_trees_init=max_trees_init,
-                    alpha=alpha,
-                    l1_ratio=l1_ratio_nsgp,
-                    max_iter=max_iter_nsgp,
-                    seed=seed,
-                    load_pareto=False
-                )
-                train_obj1 = list(csv_data['TrainParetoObj1'])
-                test_obj1 = list(csv_data['TestParetoObj1'])
-                obj_2 = list(csv_data['ParetoObj2'])
+                train_single_values = []
+                test_single_values = []
+                for seed in seed_range:
+                    csv_data, _ = read_nsgp(
+                        base_path=base_path,
+                        method='nsgp',
+                        dataset_name=dataset_name,
+                        normalize=normalize,
+                        test_size=test_size,
+                        pop_size=pop_size,
+                        num_gen=num_gen,
+                        max_size=max_size,
+                        min_depth=min_depth,
+                        init_max_height=init_max_height,
+                        tournament_size=tournament_size,
+                        min_trees_init=min_trees_init,
+                        max_trees_init=max_trees_init,
+                        alpha=alpha,
+                        l1_ratio=l1_ratio_nsgp,
+                        max_iter=max_iter_nsgp,
+                        seed=seed,
+                        load_pareto=False
+                    )
+                    train_obj1 = list(csv_data['TrainParetoObj1'])
+                    test_obj1 = list(csv_data['TestParetoObj1'])
+                    obj_2 = list(csv_data['ParetoObj2'])
 
-                train_hv = []
-                test_hv = []
+                    train_hv = []
+                    test_hv = []
 
-                for single_train_obj1, single_test_obj1, single_obj2 in zip(train_obj1, test_obj1, obj_2):
-                    single_train_obj1 = [float(val) for val in single_train_obj1.split(' ')]
-                    single_test_obj1 = [float(val) for val in single_test_obj1.split(' ')]
-                    single_obj2 = [float(val) for val in single_obj2.split(' ')]
+                    for single_train_obj1, single_test_obj1, single_obj2 in zip(train_obj1, test_obj1, obj_2):
+                        single_train_obj1 = [float(val) for val in single_train_obj1.split(' ')]
+                        single_test_obj1 = [float(val) for val in single_test_obj1.split(' ')]
+                        single_obj2 = [float(val) for val in single_obj2.split(' ')]
 
-                    cx_pairs_pareto = np.array([[temp_error, temp_feats] for temp_error, temp_feats in zip(single_train_obj1, single_obj2) if temp_feats <= k])
-                    if len(cx_pairs_pareto) == 0:
-                        cx_pairs_pareto = np.array([ref_point])
-                    train_hv.append(HV(ref_point)(cx_pairs_pareto))
+                        if max(single_obj2) > highest_n_features_ever_found:
+                            highest_n_features_ever_found = max(single_obj2)
 
-                    cx_pairs_pareto = np.array([[temp_error, temp_feats] for temp_error, temp_feats in zip(single_test_obj1, single_obj2) if temp_feats <= k])
-                    if len(cx_pairs_pareto) == 0:
-                        cx_pairs_pareto = np.array([ref_point])
-                    test_hv.append(HV(ref_point)(cx_pairs_pareto))
+                        cx_pairs_pareto = np.array([[temp_error, temp_feats] for temp_error, temp_feats in zip(single_train_obj1, single_obj2) if temp_feats <= k])
+                        if len(cx_pairs_pareto) == 0:
+                            cx_pairs_pareto = np.array([ref_point])
+                        train_hv.append(HV(ref_point)(cx_pairs_pareto))
 
-                train_single_values.append(train_hv)
-                test_single_values.append(test_hv)
-            train_single_values = list(map(list, zip(*train_single_values)))
-            test_single_values = list(map(list, zip(*test_single_values)))
-            for l in train_single_values:
-                data[dataset_name][k]['TrainMedianHV'].append(statistics.median(l))
-                data[dataset_name][k]['TrainQ1HV'].append(float(np.percentile(l, 25)))
-                data[dataset_name][k]['TrainQ3HV'].append(float(np.percentile(l, 75)))
-            for l in test_single_values:
-                data[dataset_name][k]['TestMedianHV'].append(statistics.median(l))
-                data[dataset_name][k]['TestQ1HV'].append(float(np.percentile(l, 25)))
-                data[dataset_name][k]['TestQ3HV'].append(float(np.percentile(l, 75)))
+                        cx_pairs_pareto = np.array([[temp_error, temp_feats] for temp_error, temp_feats in zip(single_test_obj1, single_obj2) if temp_feats <= k])
+                        if len(cx_pairs_pareto) == 0:
+                            cx_pairs_pareto = np.array([ref_point])
+                        test_hv.append(HV(ref_point)(cx_pairs_pareto))
+
+                    train_single_values.append(train_hv)
+                    test_single_values.append(test_hv)
+                train_single_values = list(map(list, zip(*train_single_values)))
+                test_single_values = list(map(list, zip(*test_single_values)))
+                for l in train_single_values:
+                    data[dataset_name][str(k)]['TrainMedianHV'].append(statistics.median(l))
+                    data[dataset_name][str(k)]['TrainQ1HV'].append(float(np.percentile(l, 25)))
+                    data[dataset_name][str(k)]['TrainQ3HV'].append(float(np.percentile(l, 75)))
+                for l in test_single_values:
+                    data[dataset_name][str(k)]['TestMedianHV'].append(statistics.median(l))
+                    data[dataset_name][str(k)]['TestQ1HV'].append(float(np.percentile(l, 25)))
+                    data[dataset_name][str(k)]['TestQ3HV'].append(float(np.percentile(l, 75)))
+
+        print(f'HIGHEST NUMBER OF FEATURES EVER FOUND: {highest_n_features_ever_found}')
+
+        with open('lineplot_data.json', 'w') as f:
+            json.dump(data, f, indent=4)
 
     PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
 
@@ -777,7 +850,7 @@ def lineplot(
 
 def my_callback_lineplot(plt, data, how_many_pareto_features, dataset_names, dataset_acronyms):
     n, m = len(dataset_names), len(how_many_pareto_features)
-    fig, ax = plt.subplots(n, m, figsize=(10, 10), layout='constrained', squeeze=False)
+    fig, ax = plt.subplots(n, m, figsize=(10, 7), layout='constrained', squeeze=False)
     x = list(range(1, 100 + 1))
 
     met_i = 0
@@ -786,7 +859,7 @@ def my_callback_lineplot(plt, data, how_many_pareto_features, dataset_names, dat
         acronym = dataset_acronyms[dataset_name]
         for j in range(m):
             k = how_many_pareto_features[j]
-            actual_data = data[dataset_name][k]
+            actual_data = data[dataset_name][str(k)]
 
             ax[i, j].plot(x, actual_data['TrainMedianHV'], label='', color='#E51D1D',
                           linestyle='-',
@@ -804,20 +877,23 @@ def my_callback_lineplot(plt, data, how_many_pareto_features, dataset_names, dat
             ax[i, j].set_xticks([1, 100 // 2, 100])
 
             if dataset_name == 'pbc2':
-                ax[i, j].set_ylim(17, 21)
-                ax[i, j].set_yticks([18, 19, 20])
+                ax[i, j].set_ylim(72, 84)
+                ax[i, j].set_yticks([75, 78, 81])
             elif dataset_name == 'support2':
-                ax[i, j].set_ylim(27, 33)
-                ax[i, j].set_yticks([28, 30, 32])
+                ax[i, j].set_ylim(62, 74)
+                ax[i, j].set_yticks([65, 68, 71])
             elif dataset_name == 'framingham':
-                ax[i, j].set_ylim(21, 21.8)
-                ax[i, j].set_yticks([21.2, 21.4, 21.6])
+                ax[i, j].set_ylim(70.5, 75.5)
+                ax[i, j].set_yticks([71, 73, 75])
             elif dataset_name == 'breast_cancer_metabric':
-                ax[i, j].set_ylim(40, 48)
-                ax[i, j].set_yticks([41, 45, 47])
+                ax[i, j].set_ylim(60, 72)
+                ax[i, j].set_yticks([62, 66, 70])
             elif dataset_name == 'breast_cancer_metabric_relapse':
-                ax[i, j].set_ylim(36, 44)
-                ax[i, j].set_yticks([37, 40, 43])
+                ax[i, j].set_ylim(56, 66)
+                ax[i, j].set_yticks([58, 61, 64])
+
+            #ax[i, j].set_ylim(50, 90)
+            #ax[i, j].set_yticks([60, 70, 80])
 
             ax[i, j].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False,
                                  right=False)
@@ -836,14 +912,14 @@ def my_callback_lineplot(plt, data, how_many_pareto_features, dataset_names, dat
                 ax[i, j].set_ylabel('\\texttt{HV}')
             else:
                 ax[i, j].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
-                # ax[i, j].tick_params(labelleft=False)
-                # ax[i, j].set_yticklabels([])
+                ax[i, j].tick_params(labelleft=False)
+                ax[i, j].set_yticklabels([])
                 if j == m - 1:
                     # axttt = ax[i, j].twinx()
                     ax[i, j].set_ylabel(acronym, rotation=270, labelpad=14)
                     ax[i, j].yaxis.set_label_position("right")
-                    # ax[i, j].tick_params(labelleft=False)
-                    # ax[i, j].set_yticklabels([])
+                    ax[i, j].tick_params(labelleft=False)
+                    ax[i, j].set_yticklabels([])
                     # ax[i, j].yaxis.tick_right()
 
             if i == n - 1 and j == m - 1:
@@ -870,23 +946,23 @@ def main():
         except yaml.YAMLError as exc:
             raise exc
 
-    # with open(os.path.join(base_path, 'config_survivaltree.yaml'), 'r') as yaml_file:
-    #     try:
-    #         survivaltree_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
-    #     except yaml.YAMLError as exc:
-    #         raise exc
+    with open(os.path.join(base_path, 'config_survivaltree.yaml'), 'r') as yaml_file:
+        try:
+            survivaltree_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
+        except yaml.YAMLError as exc:
+            raise exc
 
-    # with open(os.path.join(base_path, 'config_gradientboost.yaml'), 'r') as yaml_file:
-    #    try:
-    #        gradientboost_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
-    #    except yaml.YAMLError as exc:
-    #        raise exc
+    with open(os.path.join(base_path, 'config_gradientboost.yaml'), 'r') as yaml_file:
+       try:
+           gradientboost_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
+       except yaml.YAMLError as exc:
+           raise exc
 
-    # with open(os.path.join(base_path, 'config_randomforest.yaml'), 'r') as yaml_file:
-    #    try:
-    #        randomforest_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
-    #    except yaml.YAMLError as exc:
-    #        raise exc
+    with open(os.path.join(base_path, 'config_randomforest.yaml'), 'r') as yaml_file:
+       try:
+           randomforest_config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
+       except yaml.YAMLError as exc:
+           raise exc
 
     test_size: float = 0.3
 
@@ -907,14 +983,14 @@ def main():
     alpha_min_ratio: float = coxnet_config_dict['alpha_min_ratio']
     max_iter: int = coxnet_config_dict['max_iter']
 
-    # n_max_depths_st: int = survivaltree_config_dict['n_max_depths']
-    # n_folds_st: int = survivaltree_config_dict['n_folds']
+    n_max_depths_st: int = survivaltree_config_dict['n_max_depths']
+    n_folds_st: int = survivaltree_config_dict['n_folds']
 
-    # n_max_depths_gb: int = gradientboost_config_dict['n_max_depths']
-    # n_folds_gb: int = gradientboost_config_dict['n_folds']
+    n_max_depths_gb: int = gradientboost_config_dict['n_max_depths']
+    n_folds_gb: int = gradientboost_config_dict['n_folds']
 
-    # n_max_depths_rf: int = randomforest_config_dict['n_max_depths']
-    # n_folds_rf: int = randomforest_config_dict['n_folds']
+    n_max_depths_rf: int = randomforest_config_dict['n_max_depths']
+    n_folds_rf: int = randomforest_config_dict['n_folds']
 
     split_types: list[str] = ['Train', 'Test']
     dataset_names: list[str] = ['pbc2', 'support2', 'framingham', 'breast_cancer_metabric', 'breast_cancer_metabric_relapse']
@@ -929,7 +1005,7 @@ def main():
         'breast_cancer_metabric_relapse': r'BCR'
     }
 
-    methods_acronyms = {'coxnet': 'CX', 'nsgp': 'MT', 'survivaltree': 'ST'}
+    methods_acronyms = {'randomsearch': 'RS', 'coxnet': 'CX', 'nsgp': 'MT', 'survivaltree': 'ST', 'gradientboost': 'GB', 'randomforest': 'RF'}
 
     palette_boxplot = {'$k = 3$': '#C5F30C',
                        '$k = 4$': '#31AB0C',
@@ -986,7 +1062,7 @@ def main():
     #     palette_boxplot=palette_boxplot
     # )
 
-    # values, comparisons = stat_test(
+    # rs_values, rs_comparisons = stat_test(
     #     base_path=base_path,
     #     test_size=test_size,
     #     n_alphas=n_alphas,
@@ -1014,34 +1090,69 @@ def main():
     #     n_max_depths_rf=n_max_depths_rf,
     #     n_folds_rf=n_folds_rf,
     #     how_many_pareto_features_table=[1, 2, 3, 4, 5, 1000],
-    #     methods=['coxnet', 'nsgp'],
+    #     methods=['randomsearch', 'nsgp'],
     # )
     #
-    # with open('values.json', 'w') as f:
-    #     json.dump(values, f, indent=4)
-    # with open('comparisons.json', 'w') as f:
-    #     json.dump(comparisons, f, indent=4)
+    # with open('rs_values.json', 'w') as f:
+    #     json.dump(rs_values, f, indent=4)
+    # with open('rs_comparisons.json', 'w') as f:
+    #     json.dump(rs_comparisons, f, indent=4)
 
-    with open('values.json', 'r') as f:
-        values = json.load(f)
-    with open('comparisons.json', 'r') as f:
-        comparisons = json.load(f)
+    # with open('rs_values.json', 'r') as f:
+    #     rs_values = json.load(f)
+    # with open('rs_comparisons.json', 'r') as f:
+    #     rs_comparisons = json.load(f)
 
 
-    # print_table_hv_ci(
-    #     values=values,
-    #     comparisons=comparisons,
-    #     methods=['coxnet', 'nsgp'],
-    #     methods_acronyms=methods_acronyms,
-    #     how_many_pareto_features_table=[1, 2, 3, 4, 5, 1000],
+    # white_values, white_comparisons = stat_test(
+    #     base_path=base_path,
+    #     test_size=test_size,
+    #     n_alphas=n_alphas,
+    #     l1_ratio=l1_ratio,
+    #     alpha_min_ratio=alpha_min_ratio,
+    #     max_iter=max_iter,
     #     normalizes=normalizes,
     #     dataset_names=dataset_names,
+    #     seed_range=seed_range,
+    #     pop_size=pop_size,
+    #     num_gen=num_gen,
+    #     max_size=max_size,
+    #     min_depth=min_depth,
+    #     init_max_height=init_max_height,
+    #     tournament_size=tournament_size,
+    #     min_trees_init=min_trees_init,
+    #     max_trees_init=max_trees_init,
+    #     alpha=alpha,
+    #     l1_ratio_nsgp=l1_ratio_nsgp,
+    #     max_iter_nsgp=max_iter_nsgp,
+    #     n_max_depths_st=n_max_depths_st,
+    #     n_folds_st=n_folds_st,
+    #     n_max_depths_gb=n_max_depths_gb,
+    #     n_folds_gb=n_folds_gb,
+    #     n_max_depths_rf=n_max_depths_rf,
+    #     n_folds_rf=n_folds_rf,
+    #     how_many_pareto_features_table=[1, 2, 3, 4, 5, 1000],
+    #     methods=['survivaltree', 'coxnet', 'nsgp'],
     # )
+    #
+    # with open('white_values.json', 'w') as f:
+    #     json.dump(white_values, f, indent=4)
+    # with open('white_comparisons.json', 'w') as f:
+    #     json.dump(white_comparisons, f, indent=4)
 
-    lineplot(
+    with open('white_values.json', 'r') as f:
+        white_values = json.load(f)
+    with open('white_comparisons.json', 'r') as f:
+        white_comparisons = json.load(f)
+
+    black_values, black_comparisons = stat_test(
         base_path=base_path,
         test_size=test_size,
-        normalize=False,
+        n_alphas=n_alphas,
+        l1_ratio=l1_ratio,
+        alpha_min_ratio=alpha_min_ratio,
+        max_iter=max_iter,
+        normalizes=normalizes,
         dataset_names=dataset_names,
         seed_range=seed_range,
         pop_size=pop_size,
@@ -1052,12 +1163,63 @@ def main():
         tournament_size=tournament_size,
         min_trees_init=min_trees_init,
         max_trees_init=max_trees_init,
+        alpha=alpha,
         l1_ratio_nsgp=l1_ratio_nsgp,
         max_iter_nsgp=max_iter_nsgp,
-        alpha=alpha,
-        dataset_acronyms=dataset_names_acronyms,
-        how_many_pareto_features=[3, 4, 5, 1000],
+        n_max_depths_st=n_max_depths_st,
+        n_folds_st=n_folds_st,
+        n_max_depths_gb=n_max_depths_gb,
+        n_folds_gb=n_folds_gb,
+        n_max_depths_rf=n_max_depths_rf,
+        n_folds_rf=n_folds_rf,
+        how_many_pareto_features_table=[1, 2, 3, 4, 5, 1000],
+        methods=['gradientboost', 'randomforest', 'nsgp'],
     )
+
+    with open('black_values.json', 'w') as f:
+        json.dump(black_values, f, indent=4)
+    with open('black_comparisons.json', 'w') as f:
+        json.dump(black_comparisons, f, indent=4)
+
+    with open('black_values.json', 'r') as f:
+        black_values = json.load(f)
+    with open('black_comparisons.json', 'r') as f:
+        black_comparisons = json.load(f)
+
+    with open('lineplot_data.json', 'r') as f:
+        lineplot_data = json.load(f)
+
+    print_table_hv_ci(
+        values=black_values,
+        comparisons=black_comparisons,
+        methods=['gradientboost', 'randomforest', 'nsgp'],
+        methods_acronyms=methods_acronyms,
+        how_many_pareto_features_table=[1, 2, 3, 4, 5, 1000],
+        normalizes=normalizes,
+        dataset_names=dataset_names,
+    )
+
+    # lineplot(
+    #     base_path=base_path,
+    #     data=lineplot_data,
+    #     test_size=test_size,
+    #     normalize=False,
+    #     dataset_names=dataset_names,
+    #     seed_range=seed_range,
+    #     pop_size=pop_size,
+    #     num_gen=num_gen,
+    #     max_size=max_size,
+    #     min_depth=min_depth,
+    #     init_max_height=init_max_height,
+    #     tournament_size=tournament_size,
+    #     min_trees_init=min_trees_init,
+    #     max_trees_init=max_trees_init,
+    #     l1_ratio_nsgp=l1_ratio_nsgp,
+    #     max_iter_nsgp=max_iter_nsgp,
+    #     alpha=alpha,
+    #     dataset_acronyms=dataset_names_acronyms,
+    #     how_many_pareto_features=[3, 4, 5, 1000],
+    # )
 
 
 
