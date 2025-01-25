@@ -181,14 +181,14 @@ def run_survival_ensemble_tree(
     }
 
     param_grid_random_forest = {
-        "model__estimator__n_estimators": [100, 500],
+        "model__estimator__n_estimators": [50, 250],
         "model__estimator__min_samples_split": [2, 5, 8],
         "model__estimator__min_samples_leaf": [1, 4],
     }
 
     if n_max_depths <= 0:
         n_max_depths = 0
-        a_grid_of_different_max_depths = [3, 6, 9, 15, 21, 27, 30, 60]
+        a_grid_of_different_max_depths = [3, 6, 9]
         param_grid_survival_tree['model__estimator__max_depth'] = a_grid_of_different_max_depths
         param_grid_gradient_boost['model__estimator__max_depth'] = a_grid_of_different_max_depths
         param_grid_random_forest['model__estimator__max_depth'] = a_grid_of_different_max_depths

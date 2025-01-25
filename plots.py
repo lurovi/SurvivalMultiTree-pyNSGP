@@ -2,6 +2,15 @@ import json
 import statistics
 from typing import Any
 
+import os.path
+
+from sklearn.pipeline import Pipeline
+from sksurv.metrics import as_concordance_index_ipcw_scorer
+from pynsgp.Utils.data import SimpleStdScalerOneHot
+
+from sksurv.ensemble import GradientBoostingSurvivalAnalysis, RandomSurvivalForest
+from sklearn.model_selection import GridSearchCV
+
 import fastplot
 import numpy as np
 import pandas as pd
@@ -9,6 +18,11 @@ import seaborn as sns
 import os
 
 from pymoo.indicators.hv import HV
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sksurv.linear_model import CoxnetSurvivalAnalysis
+from sksurv.tree import SurvivalTree
+
+from methods import set_random_seed, load_preprocess_data, get_coxnet_at_k_coefs
 from pynsgp.Utils.pickle_persist import decompress_pickle, decompress_dill
 from pynsgp.Utils.data import load_dataset, nsgp_path_string, cox_net_path_string, survival_ensemble_tree_path_string, \
     simple_basic_cast_and_nan_drop
@@ -22,6 +36,22 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
+
+def filter_non_dominated_only(pairs_pareto):
+    new_pareto = []
+
+    for i, pair in enumerate(pairs_pareto):
+        error, size = pair[0], pair[1]
+        dominated = False
+        for j, other_pair in enumerate(pairs_pareto):
+            other_error, other_size = other_pair[0], other_pair[1]
+            if (other_error <= error and other_size <= size) and (other_error < error or other_size < size):
+                dominated = True
+                break
+        if not dominated:
+            new_pareto.append(pair)
+
+    return new_pareto
 
 
 def callback_scatter_plot(plt, coxnet_n_features_list, coxnet_errors_list, nsgp_n_features_list, nsgp_errors_list):
@@ -58,7 +88,14 @@ def scatter_plot(
         nsgp_n_features_list,
         nsgp_errors_list
 ):
-    PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
+    # PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
+
+    preamble = r'''
+        \usepackage{amsmath}
+        \usepackage{libertine}
+        '''
+
+    PLOT_ARGS = {'rcParams': {'text.latex.preamble': preamble, 'pdf.fonttype': 42, 'ps.fonttype': 42}}
 
     fastplot.plot(
         None, f'pareto_{dataset}_{split_type}_seed{seed}.pdf',
@@ -194,6 +231,347 @@ def read_nsgp(
     data = pd.read_csv(os.path.join(path, f'output_seed{seed}.csv'), sep=',')
     pareto = decompress_pickle(os.path.join(path, f'pareto_seed{seed}.pbz2')) if load_pareto else None
     return data, pareto
+
+
+def create_survival_function(
+        base_path,
+        test_size,
+        dataset_name,
+        seed,
+        n_alphas,
+        l1_ratio,
+        alpha_min_ratio,
+        max_iter,
+        pop_size,
+        num_gen,
+        max_size,
+        min_depth,
+        init_max_height,
+        tournament_size,
+        min_trees_init,
+        max_trees_init,
+        alpha,
+        l1_ratio_nsgp,
+        max_iter_nsgp,
+        n_max_depths_st,
+        n_folds_st,
+        n_max_depths_gb,
+        n_folds_gb,
+        n_max_depths_rf,
+        n_folds_rf,
+):
+
+    data: dict[str, list[float]] = {}
+
+    param_grid_survival_tree = {
+        "model__estimator__min_samples_split": [2, 5, 8],
+        "model__estimator__min_samples_leaf": [1, 4],
+        "model__estimator__max_features": [0.5, 1.0],
+        "model__estimator__splitter": ["best", "random"],
+    }
+
+    param_grid_gradient_boost = {
+        "model__estimator__loss": ["coxph"],
+        "model__estimator__learning_rate": [0.1, 0.01],
+        "model__estimator__n_estimators": [50, 250],
+        "model__estimator__min_samples_split": [2, 5, 8],
+        "model__estimator__min_samples_leaf": [1, 4],
+        "model__estimator__max_depth": [3, 6, 9],
+    }
+
+    param_grid_random_forest = {
+        "model__estimator__n_estimators": [50, 250],
+        "model__estimator__min_samples_split": [2, 5, 8],
+        "model__estimator__min_samples_leaf": [1, 4],
+        "model__estimator__max_depth": [3, 6, 9],
+    }
+
+    # ======================================
+    # NSGP
+    # ======================================
+
+    nsgpd, pareto_nsgpd = read_nsgp(
+        base_path=base_path,
+        method='nsgp',
+        dataset_name=dataset_name,
+        normalize=False,
+        test_size=test_size,
+        pop_size=pop_size,
+        num_gen=num_gen,
+        max_size=max_size,
+        min_depth=min_depth,
+        init_max_height=init_max_height,
+        tournament_size=tournament_size,
+        min_trees_init=min_trees_init,
+        max_trees_init=max_trees_init,
+        alpha=alpha,
+        l1_ratio=l1_ratio_nsgp,
+        max_iter=max_iter_nsgp,
+        seed=seed,
+        load_pareto=True
+    )
+
+    last_pareto = pareto_nsgpd[-1]
+    n_features = list(nsgpd['ParetoObj2'])[-1]
+    n_features = [float(abc) for abc in n_features.split(' ')]
+    i = np.argmax(n_features)
+    tree = last_pareto[i]
+
+    set_random_seed(seed)
+
+    X_train, X_test, y_train, y_test = load_preprocess_data(
+        corr_drop_threshold=0.98,
+        scale_numerical=True,
+        random_state=seed,
+        dataset_name=dataset_name,
+        test_size=test_size
+    )
+    largest_value = 1e+8
+    output = tree(X_train)
+    output.clip(-largest_value, largest_value, out=output)
+    cox = CoxnetSurvivalAnalysis(
+        n_alphas=1,
+        alphas=[alpha],
+        max_iter=max_iter_nsgp,
+        l1_ratio=l1_ratio,
+        normalize=False,
+        verbose=False,
+        fit_baseline_model=True
+    )
+    cox.fit(output, y_train)
+    output = tree(X_test)
+    output.clip(-largest_value, largest_value, out=output)
+    data['nsgp_probs'] = np.median(cox.predict_survival_function(output, alpha=alpha, return_array=True), axis=0).tolist()
+    data['nsgp_times'] = cox.unique_times_.tolist()
+
+    print('NSGP DONE')
+
+    # ======================================
+    # COXNET
+    # ======================================
+
+    set_random_seed(seed)
+
+    X_train, X_test, y_train, y_test = load_preprocess_data(
+        corr_drop_threshold=0.98,
+        scale_numerical=True,
+        random_state=seed,
+        dataset_name=dataset_name,
+        test_size=test_size
+    )
+
+    n_features = X_train.shape[1]
+
+    cox = CoxnetSurvivalAnalysis(
+        n_alphas=n_alphas,
+        l1_ratio=l1_ratio,
+        alpha_min_ratio=alpha_min_ratio,
+        max_iter=max_iter,
+        verbose=False,
+        normalize=True,
+        fit_baseline_model=True
+    )
+    cox.fit(X_train, y_train)
+
+    for k in range(1, n_features + 1):
+        result = get_coxnet_at_k_coefs(cox, k)
+        if result is None:
+            continue
+        alpha = float(result[0])
+
+    data['coxnet_probs'] = np.median(cox.predict_survival_function(X_test, alpha=alpha, return_array=True), axis=0).tolist()
+    data['coxnet_times'] = cox.unique_times_.tolist()
+
+    print('COXNET DONE')
+
+    # ======================================
+    # SURVIVAL TREE
+    # ======================================
+
+    X, y = load_dataset(dataset_name=dataset_name)
+    X, y = simple_basic_cast_and_nan_drop(X, y)
+
+    random_state = seed ** 2
+    set_random_seed(random_state)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        stratify=[y_i[0] for y_i in y],
+        random_state=random_state
+    )
+
+    n_features = X_train.shape[1]
+    largest_value = 1e+8
+
+    lower, upper = np.percentile([y_i[1] for y_i in y_train], [1, 99])
+    train_times = np.arange(lower, upper)
+    tau_train = train_times[-1]
+
+    lower, upper = np.percentile([y_i[1] for y_i in y_test], [1, 99])
+    test_times = np.arange(lower, upper)
+    tau_test = test_times[-1]
+
+    folds = StratifiedKFold(
+        n_splits=n_folds_st, shuffle=True,
+        random_state=random_state + 50,
+    ).split(X_train, [y_i[0] for y_i in y_train])
+
+    param_grid = param_grid_survival_tree
+    model = SurvivalTree(max_depth=n_max_depths_st, random_state=random_state)
+
+    pipeline = Pipeline(
+        steps=[
+            ('scaler', SimpleStdScalerOneHot(normalize=True)),
+            ('model', as_concordance_index_ipcw_scorer(model, tau=tau_train))
+        ]
+    )
+
+    gcv = GridSearchCV(
+        pipeline,
+        param_grid=param_grid,
+        cv=folds,
+        error_score=0.0,
+        n_jobs=1,
+        refit=True,
+        verbose=False
+    ).fit(X_train, y_train)
+
+    actual_model = gcv.best_estimator_['model'].estimator
+    actual_scaler = gcv.best_estimator_['scaler']
+
+    data['survivaltree_probs'] = np.median(actual_model.predict_survival_function(actual_scaler.transform(X_test), return_array=True), axis=0).tolist()
+    data['survivaltree_times'] = actual_model.unique_times_.tolist()
+
+    print('SURVIVALTREE DONE')
+
+    # ======================================
+    # GRADIENT BOOST
+    # ======================================
+
+    X, y = load_dataset(dataset_name=dataset_name)
+    X, y = simple_basic_cast_and_nan_drop(X, y)
+
+    random_state = seed ** 2
+    set_random_seed(random_state)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        stratify=[y_i[0] for y_i in y],
+        random_state=random_state
+    )
+
+    n_features = X_train.shape[1]
+    largest_value = 1e+8
+
+    lower, upper = np.percentile([y_i[1] for y_i in y_train], [1, 99])
+    train_times = np.arange(lower, upper)
+    tau_train = train_times[-1]
+
+    lower, upper = np.percentile([y_i[1] for y_i in y_test], [1, 99])
+    test_times = np.arange(lower, upper)
+    tau_test = test_times[-1]
+
+    folds = StratifiedKFold(
+        n_splits=n_folds_gb, shuffle=True,
+        random_state=random_state + 50,
+    ).split(X_train, [y_i[0] for y_i in y_train])
+
+    param_grid = param_grid_gradient_boost
+    model = GradientBoostingSurvivalAnalysis(random_state=random_state)
+
+    pipeline = Pipeline(
+        steps=[
+            ('scaler', SimpleStdScalerOneHot(normalize=True)),
+            ('model', as_concordance_index_ipcw_scorer(model, tau=tau_train))
+        ]
+    )
+
+    gcv = GridSearchCV(
+        pipeline,
+        param_grid=param_grid,
+        cv=folds,
+        error_score=0.0,
+        n_jobs=1,
+        refit=True,
+        verbose=False
+    ).fit(X_train, y_train)
+
+    actual_model = gcv.best_estimator_['model'].estimator
+    actual_scaler = gcv.best_estimator_['scaler']
+
+    data['gradientboost_probs'] = np.median(actual_model.predict_survival_function(actual_scaler.transform(X_test), return_array=True), axis=0).tolist()
+    data['gradientboost_times'] = actual_model.unique_times_.tolist()
+
+    print('GRADIENTBOOST DONE')
+
+    # ======================================
+    # RANDOM FOREST
+    # ======================================
+
+    X, y = load_dataset(dataset_name=dataset_name)
+    X, y = simple_basic_cast_and_nan_drop(X, y)
+
+    random_state = seed ** 2
+    set_random_seed(random_state)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        stratify=[y_i[0] for y_i in y],
+        random_state=random_state
+    )
+
+    n_features = X_train.shape[1]
+    largest_value = 1e+8
+
+    lower, upper = np.percentile([y_i[1] for y_i in y_train], [1, 99])
+    train_times = np.arange(lower, upper)
+    tau_train = train_times[-1]
+
+    lower, upper = np.percentile([y_i[1] for y_i in y_test], [1, 99])
+    test_times = np.arange(lower, upper)
+    tau_test = test_times[-1]
+
+    folds = StratifiedKFold(
+        n_splits=n_folds_rf, shuffle=True,
+        random_state=random_state + 50,
+    ).split(X_train, [y_i[0] for y_i in y_train])
+
+    param_grid = param_grid_random_forest
+    model = RandomSurvivalForest(random_state=random_state)
+
+    pipeline = Pipeline(
+        steps=[
+            ('scaler', SimpleStdScalerOneHot(normalize=True)),
+            ('model', as_concordance_index_ipcw_scorer(model, tau=tau_train))
+        ]
+    )
+
+    gcv = GridSearchCV(
+        pipeline,
+        param_grid=param_grid,
+        cv=folds,
+        error_score=0.0,
+        n_jobs=1,
+        refit=True,
+        verbose=False
+    ).fit(X_train, y_train)
+
+    actual_model = gcv.best_estimator_['model'].estimator
+    actual_scaler = gcv.best_estimator_['scaler']
+
+    data['randomforest_probs'] = np.median(actual_model.predict_survival_function(actual_scaler.transform(X_test), return_array=True), axis=0).tolist()
+    data['randomforest_times'] = actual_model.unique_times_.tolist()
+
+    print('RANDOMFOREST DONE')
+
+    with open(f'survival_function_data_seed{seed}.json', 'w') as f:
+        json.dump(data, f, indent=4)
 
 
 def print_some_formulae(
@@ -416,7 +794,14 @@ def stat_test_print(
         print(f'{split_type} Omnibus Test (Kruskal-Wallis) {is_kruskalwallis_passed(values_for_omnibus_test)}')
         print()
 
-        PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
+        # PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
+
+        preamble = r'''
+            \usepackage{amsmath}
+            \usepackage{libertine}
+            '''
+
+        PLOT_ARGS = {'rcParams': {'text.latex.preamble': preamble, 'pdf.fonttype': 42, 'ps.fonttype': 42}}
 
         if split_type.lower() == 'test':
             fastplot.plot(None, f'boxplot.pdf', mode='callback', callback=lambda plt: my_callback_boxplot(plt, boxplot_data, palette_boxplot), style='latex', **PLOT_ARGS)
@@ -429,6 +814,340 @@ def my_callback_boxplot(plt, data, palette):
     ax.tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
     ax.grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
     sns.boxplot(pd.DataFrame(data), x='Dataset', y='Length of Multi Tree', hue='k', palette=palette, legend=False, log_scale=None, fliersize=0.0, showfliers=False, ax=ax)
+
+
+def create_lineplots_on_single_line_multitree_length(
+        base_path,
+        test_size,
+        dataset_names,
+        seed_range,
+        pop_size,
+        num_gen,
+        max_size,
+        min_depth,
+        init_max_height,
+        tournament_size,
+        min_trees_init,
+        max_trees_init,
+        alpha,
+        l1_ratio_nsgp,
+        max_iter_nsgp,
+        how_many_pareto_features,
+        dataset_names_acronyms,
+):
+
+    # dataset k values
+    lineplot_data = {dataset_name: {k: [] for k in how_many_pareto_features} for dataset_name in dataset_names}
+    for dataset_name in dataset_names:
+        for seed in seed_range:
+            nsgpd, _ = read_nsgp(
+                base_path=base_path,
+                method='nsgp',
+                dataset_name=dataset_name,
+                normalize=False,
+                test_size=test_size,
+                pop_size=pop_size,
+                num_gen=num_gen,
+                max_size=max_size,
+                min_depth=min_depth,
+                init_max_height=init_max_height,
+                tournament_size=tournament_size,
+                min_trees_init=min_trees_init,
+                max_trees_init=max_trees_init,
+                alpha=alpha,
+                l1_ratio=l1_ratio_nsgp,
+                max_iter=max_iter_nsgp,
+                seed=seed,
+                load_pareto=False
+            )
+
+            nsgp_n_trees_in_multi_tree_list = [float(val) for val in nsgpd.loc[num_gen - 1, 'ParetoNTrees'].split(' ')]
+            nsgp_n_features_list = [float(val) for val in nsgpd.loc[num_gen - 1, 'ParetoObj2'].split(' ')]
+
+            for k in how_many_pareto_features:
+                compared_n_trees = [temp_n_trees for temp_n_trees, temp_feats in zip(nsgp_n_trees_in_multi_tree_list, nsgp_n_features_list) if temp_feats == k]
+                if len(compared_n_trees) == 0:
+                    compared_n_trees = [0]
+                compared_n_tree = compared_n_trees[0]
+                lineplot_data[dataset_name][k].append(compared_n_tree)
+
+    # PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
+
+    preamble = r'''
+    \usepackage{amsmath}
+    \usepackage{libertine}
+    '''
+
+    PLOT_ARGS = {'rcParams': {'text.latex.preamble': preamble, 'pdf.fonttype': 42, 'ps.fonttype': 42}}
+
+    fastplot.plot(None, f'multitree_length_lineplot.pdf', mode='callback', callback=lambda plt: my_callback_multitree_length_lineplot(plt, lineplot_data, dataset_names, dataset_names_acronyms, how_many_pareto_features), style='latex', **PLOT_ARGS)
+
+
+def my_callback_multitree_length_lineplot(plt, lineplot_data, dataset_names, dataset_names_acronyms, how_many_pareto_features):
+    n, m = 1, len(dataset_names)
+    fig, ax = plt.subplots(n, m, figsize=(10, 2), layout='constrained', squeeze=False)
+    x = how_many_pareto_features
+
+    for i in range(m):
+        dataset_name = dataset_names[i]
+        acronym = dataset_names_acronyms[dataset_name]
+
+        all_med, all_q1, all_q3 = [], [], []
+        for k in how_many_pareto_features:
+            actual_data = lineplot_data[dataset_name][k]
+            all_med.append(statistics.median(actual_data))
+            all_q1.append(np.percentile(actual_data, 25))
+            all_q3.append(np.percentile(actual_data, 75))
+
+        ax[0, i].plot(x, all_med, label='', color='#000080',
+                      linestyle='-',
+                      linewidth=1.0, markersize=10)
+        ax[0, i].fill_between(x, all_q1, all_q3,
+                              color='#000080', alpha=0.1)
+
+
+        ax[0, i].set_xlim(min(how_many_pareto_features), max(how_many_pareto_features))
+        ax[0, i].set_xticks(how_many_pareto_features)
+
+        ax[0, i].set_ylim(2, 12)
+        ax[0, i].set_yticks([3, 5, 7, 9, 11])
+
+        ax[0, i].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False,
+                             right=False)
+
+        ax[0, i].set_title(acronym)
+
+        ax[0, i].set_xlabel('$k$')
+
+        if i == 0:
+            ax[0, i].set_ylabel('Multi-Tree Length')
+        else:
+            ax[0, i].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+            ax[0, i].tick_params(labelleft=False)
+            ax[0, i].set_yticklabels([])
+
+        if i == m - 1:
+            ax[0, i].tick_params(pad=7)
+
+        ax[0, i].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+
+
+def median_pareto_front_all_methods(
+        base_path,
+        test_size,
+        n_alphas,
+        l1_ratio,
+        alpha_min_ratio,
+        max_iter,
+        dataset_names,
+        dataset_names_acronyms,
+        split_type,
+        seed_range,
+        pop_size,
+        num_gen,
+        max_size,
+        min_depth,
+        init_max_height,
+        tournament_size,
+        min_trees_init,
+        max_trees_init,
+        alpha,
+        l1_ratio_nsgp,
+        max_iter_nsgp,
+        n_max_depths_st,
+        n_folds_st,
+        n_max_depths_gb,
+        n_folds_gb,
+        n_max_depths_rf,
+        n_folds_rf,
+        palette_methods,
+):
+
+    methods: list[str] = ['coxnet', 'nsgp', 'survivaltree', 'gradientboost', 'randomforest']
+
+    # dataset method values
+    values: dict[str, dict[str, list[float]]] = {dataset_name: {method: [] for method in methods} for dataset_name in dataset_names}
+    paretos: dict[str, dict[str, list[list[list[float]]]]] = {dataset_name: {method: [] for method in methods} for dataset_name in dataset_names}
+
+    medians: dict[str, dict[str, float]] = {dataset_name: {} for dataset_name in dataset_names}
+
+    n_features = 100 # X.shape[1]
+    ref_point = np.array([0.0, n_features])
+
+    for dataset_name in dataset_names:
+        for method in methods:
+            for seed in seed_range:
+                if method == 'coxnet':
+                    csv_data, _ = read_coxnet(
+                        base_path=base_path,
+                        method=method,
+                        dataset_name=dataset_name,
+                        normalize=True,
+                        test_size=test_size,
+                        n_alphas=n_alphas,
+                        l1_ratio=l1_ratio,
+                        alpha_min_ratio=alpha_min_ratio,
+                        max_iter=max_iter,
+                        seed=seed
+                    )
+
+                    n_features_list = list(csv_data['DistinctRawFeatures'])
+                    errors_list = list(csv_data[split_type + 'Error'])
+                elif method == 'survivaltree':
+                    csv_data, _ = read_survivalensembletree(
+                        base_path=base_path,
+                        method=method,
+                        dataset_name=dataset_name,
+                        normalize=True,
+                        test_size=test_size,
+                        n_max_depths=n_max_depths_st,
+                        n_folds=n_folds_st,
+                        seed=seed
+                    )
+
+                    n_features_list = list(csv_data['DistinctRawFeatures'])
+                    errors_list = list(csv_data[split_type + 'Error'])
+                elif method == 'gradientboost':
+                    csv_data, _ = read_survivalensembletree(
+                        base_path=base_path,
+                        method=method,
+                        dataset_name=dataset_name,
+                        normalize=True,
+                        test_size=test_size,
+                        n_max_depths=n_max_depths_gb,
+                        n_folds=n_folds_gb,
+                        seed=seed
+                    )
+
+                    n_features_list = list(csv_data['DistinctRawFeatures'])
+                    errors_list = list(csv_data[split_type + 'Error'])
+                elif method == 'randomforest':
+                    csv_data, _ = read_survivalensembletree(
+                        base_path=base_path,
+                        method=method,
+                        dataset_name=dataset_name,
+                        normalize=True,
+                        test_size=test_size,
+                        n_max_depths=n_max_depths_rf,
+                        n_folds=n_folds_rf,
+                        seed=seed
+                    )
+
+                    n_features_list = list(csv_data['DistinctRawFeatures'])
+                    errors_list = list(csv_data[split_type + 'Error'])
+                elif method == 'nsgp':
+                    csv_data, _ = read_nsgp(
+                        base_path=base_path,
+                        method=method,
+                        dataset_name=dataset_name,
+                        normalize=False,
+                        test_size=test_size,
+                        pop_size=pop_size,
+                        num_gen=num_gen,
+                        max_size=max_size,
+                        min_depth=min_depth,
+                        init_max_height=init_max_height,
+                        tournament_size=tournament_size,
+                        min_trees_init=min_trees_init,
+                        max_trees_init=max_trees_init,
+                        alpha=alpha,
+                        l1_ratio=l1_ratio_nsgp,
+                        max_iter=max_iter_nsgp,
+                        seed=seed,
+                        load_pareto=False
+                    )
+
+                    n_features_list = [float(val) for val in csv_data.loc[num_gen - 1, 'ParetoObj2'].split(' ')]
+                    errors_list = [float(val) for val in csv_data.loc[num_gen - 1, split_type + 'ParetoObj1'].split(' ')]
+                else:
+                    raise ValueError(f'Unrecognized method {method}.')
+
+                if method in ('gradientboost', 'randomforest'):
+                    compared_c_indexes = [temp_error for temp_error, temp_feats in zip(errors_list, n_features_list)]
+                    if len(compared_c_indexes) == 0:
+                        compared_c_indexes = [0.0]
+                    compared_c_index = compared_c_indexes[0]
+                    values[dataset_name][method].append(compared_c_index)
+                else:
+                    cx_pairs_pareto = [[temp_error, temp_feats] for temp_error, temp_feats in zip(errors_list, n_features_list)]
+                    if len(cx_pairs_pareto) == 0:
+                        cx_pairs_pareto = [[0.0, n_features]]
+                    cx_pairs_pareto = filter_non_dominated_only(cx_pairs_pareto)
+                    values[dataset_name][method].append(HV(ref_point)(np.array(cx_pairs_pareto)))
+                    paretos[dataset_name][method].append(cx_pairs_pareto)
+
+    for dataset_name in dataset_names:
+        for method in methods:
+            medians[dataset_name][method] = statistics.median(values[dataset_name][method])
+
+    actual_paretos: dict[str, dict[str, list[list[float]]]] = {dataset_name: {} for dataset_name in dataset_names}
+    for dataset_name in dataset_names:
+        for method in methods:
+            if method in ('gradientboost', 'randomforest'):
+                continue
+            i = int(np.argmin([abs(val - medians[dataset_name][method]) for val in values[dataset_name][method]]))
+            actual_paretos[dataset_name][method] = paretos[dataset_name][method][i]
+
+    # PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
+
+    preamble = r'''
+    \usepackage{amsmath}
+    \usepackage{libertine}
+    '''
+
+    PLOT_ARGS = {'rcParams': {'text.latex.preamble': preamble, 'pdf.fonttype': 42, 'ps.fonttype': 42}}
+
+    fastplot.plot(None, f'pareto_all_methods.pdf', mode='callback',
+                  callback=lambda plt: my_callback_pareto_all_methods(plt, medians, actual_paretos, palette_methods, dataset_names, dataset_names_acronyms), style='latex',
+                  **PLOT_ARGS)
+
+
+def my_callback_pareto_all_methods(plt, medians, actual_paretos, palette_methods, dataset_names, dataset_names_acronyms):
+    fig, ax = plt.subplots(len(dataset_names), 1, figsize=(6, 12), layout='constrained', squeeze=False)
+
+    markers = {'coxnet': 'o', 'survivaltree': '^', 'nsgp': '*'}
+
+    for i in range(len(dataset_names)):
+        dataset_name = dataset_names[i]
+        acronym = dataset_names_acronyms[dataset_name]
+        for method in markers:
+            for pair in actual_paretos[dataset_name][method]:
+                err, size = pair[0], pair[1]
+                ax[i, 0].scatter(err, size, c=palette_methods[method], marker=markers[method], s=50, edgecolor='black', linewidth=0.5)
+
+        ax[i, 0].axvline(medians[dataset_name]['gradientboost'], c=palette_methods['gradientboost'], linewidth=1.2, linestyle='-')
+        ax[i, 0].axvline(medians[dataset_name]['randomforest'], c=palette_methods['randomforest'], linewidth=1.2, linestyle='-')
+
+        ax[i, 0].set_ylim(-1, 33)
+        ax[i, 0].set_yticks(list(range(1, 33 + 1, 3)))
+        #ax[i, 0].set_xlim(-0.8, -0.6)
+        #ax[i, 0].set_xticks([-0.75, -0.70, -0.65])
+        ax[i, 0].set_xlim(-0.83, -0.52)
+        ax[i, 0].set_xticks([-0.80, -0.75, -0.70, -0.65, -0.60, -0.55])
+        ax[i, 0].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
+        if i == len(dataset_names) - 1:
+            ax[i, 0].set_xlabel('$f_1$')
+        else:
+            ax[i, 0].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+            ax[i, 0].tick_params(labelbottom=False)
+            ax[i, 0].set_xticklabels([])
+        ax[i, 0].set_ylabel('$f_2$')
+
+        axttt = ax[i, 0].twinx()
+        axttt.set_ylabel(acronym, rotation=270, labelpad=14)
+        axttt.yaxis.set_label_position("right")
+        axttt.tick_params(labelleft=False)
+        axttt.set_yticklabels([])
+        axttt.yaxis.tick_right()
+        axttt.tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
+        ax[i, 0].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
+
+        if i == len(dataset_names) - 1:
+            ax[i, 0].tick_params(pad=7)
+
+        # ax[i, 0].set_title(f'Methods Pareto Front ({metric} across all datasets and repetitions)')
+        ax[i, 0].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+
 
 
 def stat_test(
@@ -692,7 +1411,10 @@ def print_table_hv_ci(
             for normalize in normalizes:
                 for dataset_name in dataset_names:
                     hv_median = statistics.median(values['Test']['HV'][str(k)][str(normalize).lower()][dataset_name][method])
-                    ci_median = statistics.median(values['Test']['CI'][str(k)][str(normalize).lower()][dataset_name][method])
+                    if len([curr_val for curr_val in values['Test']['CI'][str(k)][str(normalize).lower()][dataset_name][method] if curr_val != 0]) == 0:
+                        ci_median = '{-}'
+                    else:
+                        ci_median = statistics.median([curr_val for curr_val in values['Test']['CI'][str(k)][str(normalize).lower()][dataset_name][method] if curr_val != 0])
                     hv_num_outperformed_methods = len(comparisons['Test']['HV'][str(k)][str(normalize).lower()][dataset_name][method])
                     ci_num_outperformed_methods = len(comparisons['Test']['CI'][str(k)][str(normalize).lower()][dataset_name][method])
                     hv_median_max = max([statistics.median(values['Test']['HV'][str(k)][str(normalize).lower()][dataset_name][method_2]) for method_2 in methods])
@@ -703,7 +1425,7 @@ def print_table_hv_ci(
                     ci_star = ''
                     if hv_median == hv_median_max:
                         hv_bold = '\\bfseries '
-                    if ci_median == ci_median_max:
+                    if ci_median == ci_median_max or ci_num_outperformed_methods == num_methods:
                         ci_bold = '\\bfseries '
                     if hv_num_outperformed_methods == num_methods:
                         hv_star = '{$^{\\scalebox{0.90}{\\textbf{\\color{blue}*}}}$}'
@@ -715,7 +1437,7 @@ def print_table_hv_ci(
                         ci_star = '{$^{\\scalebox{0.90}{\\textbf{\\color{black}*}}}$}'
 
                     hv_interpret_table += ' & ' + hv_bold + str(round(hv_median, 3)) + hv_star
-                    ci_interpret_table += ' & ' + ci_bold + str(round(ci_median, 3)) + ci_star
+                    ci_interpret_table += ' & ' + ci_bold + (str(round(ci_median, 3)) if ci_median != '{-}' else ci_median) + ci_star
 
             hv_interpret_table += ' \\\\ \n'
             ci_interpret_table += ' \\\\ \n'
@@ -843,92 +1565,159 @@ def lineplot(
         with open('lineplot_data.json', 'w') as f:
             json.dump(data, f, indent=4)
 
-    PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
+    # PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
+
+    preamble = r'''
+    \usepackage{amsmath}
+    \usepackage{libertine}
+    '''
+
+    PLOT_ARGS = {'rcParams': {'text.latex.preamble': preamble, 'pdf.fonttype': 42, 'ps.fonttype': 42}}
 
     fastplot.plot(None, f'lineplot.pdf', mode='callback', callback=lambda plt: my_callback_lineplot(plt, data, how_many_pareto_features, dataset_names, dataset_acronyms), style='latex', **PLOT_ARGS)
 
 
 def my_callback_lineplot(plt, data, how_many_pareto_features, dataset_names, dataset_acronyms):
-    n, m = len(dataset_names), len(how_many_pareto_features)
-    fig, ax = plt.subplots(n, m, figsize=(10, 7), layout='constrained', squeeze=False)
-    x = list(range(1, 100 + 1))
+    if len(how_many_pareto_features) > 1:
+        n, m = len(dataset_names), len(how_many_pareto_features)
+        fig, ax = plt.subplots(n, m, figsize=(10, 7), layout='constrained', squeeze=False)
+        x = list(range(1, 100 + 1))
 
-    met_i = 0
-    for i in range(n):
-        dataset_name = dataset_names[i]
-        acronym = dataset_acronyms[dataset_name]
-        for j in range(m):
-            k = how_many_pareto_features[j]
-            actual_data = data[dataset_name][str(k)]
+        for i in range(n):
+            dataset_name = dataset_names[i]
+            acronym = dataset_acronyms[dataset_name]
+            for j in range(m):
+                k = how_many_pareto_features[j]
+                actual_data = data[dataset_name][str(k)]
 
-            ax[i, j].plot(x, actual_data['TrainMedianHV'], label='', color='#E51D1D',
-                          linestyle='-',
-                          linewidth=1.0, markersize=10)
-            ax[i, j].fill_between(x, actual_data['TrainQ1HV'], actual_data['TrainQ3HV'],
-                                  color='#E51D1D', alpha=0.1)
+                ax[i, j].plot(x, actual_data['TrainMedianHV'], label='', color='#E51D1D',
+                              linestyle='-',
+                              linewidth=1.0, markersize=10)
+                ax[i, j].fill_between(x, actual_data['TrainQ1HV'], actual_data['TrainQ3HV'],
+                                      color='#E51D1D', alpha=0.1)
 
-            ax[i, j].plot(x, actual_data['TestMedianHV'], label='', color='#3B17F2',
-                          linestyle='-',
-                          linewidth=1.0, markersize=10)
-            ax[i, j].fill_between(x, actual_data['TestQ1HV'], actual_data['TestQ3HV'],
-                                  color='#3B17F2', alpha=0.1)
+                ax[i, j].plot(x, actual_data['TestMedianHV'], label='', color='#3B17F2',
+                              linestyle='-',
+                              linewidth=1.0, markersize=10)
+                ax[i, j].fill_between(x, actual_data['TestQ1HV'], actual_data['TestQ3HV'],
+                                      color='#3B17F2', alpha=0.1)
 
-            ax[i, j].set_xlim(1, 100)
-            ax[i, j].set_xticks([1, 100 // 2, 100])
+                ax[i, j].set_xlim(1, 100)
+                ax[i, j].set_xticks([1, 100 // 2, 100])
 
-            if dataset_name == 'pbc2':
-                ax[i, j].set_ylim(72, 84)
-                ax[i, j].set_yticks([75, 78, 81])
-            elif dataset_name == 'support2':
-                ax[i, j].set_ylim(62, 74)
-                ax[i, j].set_yticks([65, 68, 71])
-            elif dataset_name == 'framingham':
-                ax[i, j].set_ylim(70.5, 75.5)
-                ax[i, j].set_yticks([71, 73, 75])
-            elif dataset_name == 'breast_cancer_metabric':
-                ax[i, j].set_ylim(60, 72)
-                ax[i, j].set_yticks([62, 66, 70])
-            elif dataset_name == 'breast_cancer_metabric_relapse':
-                ax[i, j].set_ylim(56, 66)
-                ax[i, j].set_yticks([58, 61, 64])
+                if dataset_name == 'pbc2':
+                    ax[i, j].set_ylim(72, 84)
+                    ax[i, j].set_yticks([75, 78, 81])
+                elif dataset_name == 'support2':
+                    ax[i, j].set_ylim(62, 74)
+                    ax[i, j].set_yticks([65, 68, 71])
+                elif dataset_name == 'framingham':
+                    ax[i, j].set_ylim(70.5, 75.5)
+                    ax[i, j].set_yticks([71, 73, 75])
+                elif dataset_name == 'breast_cancer_metabric':
+                    ax[i, j].set_ylim(60, 72)
+                    ax[i, j].set_yticks([62, 66, 70])
+                elif dataset_name == 'breast_cancer_metabric_relapse':
+                    ax[i, j].set_ylim(56, 66)
+                    ax[i, j].set_yticks([58, 61, 64])
 
-            #ax[i, j].set_ylim(50, 90)
-            #ax[i, j].set_yticks([60, 70, 80])
+                #ax[i, j].set_ylim(50, 90)
+                #ax[i, j].set_yticks([60, 70, 80])
 
-            ax[i, j].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False,
-                                 right=False)
+                ax[i, j].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False,
+                                     right=False)
 
-            if i == 0:
-                ax[i, j].set_title(f'$k = {k}$' if k < 1000 else '$\\text{max}$')
+                if i == 0:
+                    ax[i, j].set_title(f'$k = {k}$' if k < 1000 else '$\\text{max}$')
 
-            if i == n - 1:
-                ax[i, j].set_xlabel('Generation')
-            else:
-                ax[i, j].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
-                ax[i, j].tick_params(labelbottom=False)
-                ax[i, j].set_xticklabels([])
+                if i == n - 1:
+                    ax[i, j].set_xlabel('Generation')
+                else:
+                    ax[i, j].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+                    ax[i, j].tick_params(labelbottom=False)
+                    ax[i, j].set_xticklabels([])
 
-            if j == 0:
-                ax[i, j].set_ylabel('\\texttt{HV}')
-            else:
-                ax[i, j].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
-                ax[i, j].tick_params(labelleft=False)
-                ax[i, j].set_yticklabels([])
-                if j == m - 1:
-                    # axttt = ax[i, j].twinx()
-                    ax[i, j].set_ylabel(acronym, rotation=270, labelpad=14)
-                    ax[i, j].yaxis.set_label_position("right")
+                if j == 0:
+                    ax[i, j].set_ylabel('\\texttt{HV}')
+                else:
+                    ax[i, j].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
                     ax[i, j].tick_params(labelleft=False)
                     ax[i, j].set_yticklabels([])
-                    # ax[i, j].yaxis.tick_right()
+                    if j == m - 1:
+                        # axttt = ax[i, j].twinx()
+                        ax[i, j].set_ylabel(acronym, rotation=270, labelpad=14)
+                        ax[i, j].yaxis.set_label_position("right")
+                        ax[i, j].tick_params(labelleft=False)
+                        ax[i, j].set_yticklabels([])
+                        # ax[i, j].yaxis.tick_right()
 
-            if i == n - 1 and j == m - 1:
-                ax[i, j].tick_params(pad=7)
+                if i == n - 1 and j == m - 1:
+                    ax[i, j].tick_params(pad=7)
 
-            ax[i, j].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+                ax[i, j].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+    else:
+        n, m = 1, len(dataset_names)
+        fig, ax = plt.subplots(n, m, figsize=(14, 3), layout='constrained', squeeze=False)
+        x = list(range(1, 100 + 1))
 
-            met_i += 1
+        for i in range(m):
+            dataset_name = dataset_names[i]
+            acronym = dataset_acronyms[dataset_name]
 
+            k = how_many_pareto_features[0]
+            actual_data = data[dataset_name][str(k)]
+
+            ax[0, i].plot(x, actual_data['TrainMedianHV'], label='', color='#E51D1D',
+                          linestyle='-',
+                          linewidth=1.0, markersize=10)
+            ax[0, i].fill_between(x, actual_data['TrainQ1HV'], actual_data['TrainQ3HV'],
+                                  color='#E51D1D', alpha=0.1)
+
+            ax[0, i].plot(x, actual_data['TestMedianHV'], label='', color='#3B17F2',
+                          linestyle='-',
+                          linewidth=1.0, markersize=10)
+            ax[0, i].fill_between(x, actual_data['TestQ1HV'], actual_data['TestQ3HV'],
+                                  color='#3B17F2', alpha=0.1)
+
+            ax[0, i].set_xlim(1, 100)
+            ax[0, i].set_xticks([1, 100 // 2, 100])
+
+            if dataset_name == 'pbc2':
+                ax[0, i].set_ylim(72, 84)
+                ax[0, i].set_yticks([75, 78, 81])
+            elif dataset_name == 'support2':
+                ax[0, i].set_ylim(62, 74)
+                ax[0, i].set_yticks([65, 68, 71])
+            elif dataset_name == 'framingham':
+                ax[0, i].set_ylim(72, 76)
+                ax[0, i].set_yticks([73, 74, 75])
+            elif dataset_name == 'breast_cancer_metabric':
+                ax[0, i].set_ylim(63, 71)
+                ax[0, i].set_yticks([65, 67, 69])
+            elif dataset_name == 'breast_cancer_metabric_relapse':
+                ax[0, i].set_ylim(58, 66)
+                ax[0, i].set_yticks([59, 62, 65])
+
+            # ax[i, j].set_ylim(50, 90)
+            # ax[i, j].set_yticks([60, 70, 80])
+
+            ax[0, i].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False,
+                                 right=False)
+
+            ax[0, i].set_title(acronym)
+
+            ax[0, i].set_xlabel('Generation')
+
+            if i == 0:
+                ax[0, i].set_ylabel('\\texttt{HV}')
+            else:
+                ax[0, i].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+                #ax[0, i].tick_params(labelleft=False)
+                #ax[0, i].set_yticklabels([])
+            if i == m - 1:
+                ax[0, i].tick_params(pad=7)
+
+            ax[0, i].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
 
 
 def main():
@@ -1005,12 +1794,68 @@ def main():
         'breast_cancer_metabric_relapse': r'BCR'
     }
 
-    methods_acronyms = {'randomsearch': 'RS', 'coxnet': 'CX', 'nsgp': 'MT', 'survivaltree': 'ST', 'gradientboost': 'GB', 'randomforest': 'RF'}
+    methods_acronyms = {'randomsearch': 'RS', 'coxnet': 'CX', 'nsgp': 'SR', 'survivaltree': 'ST', 'gradientboost': 'GB', 'randomforest': 'RF'}
 
     palette_boxplot = {'$k = 3$': '#C5F30C',
                        '$k = 4$': '#31AB0C',
                        '$k = 5$': '#283ADF',
                        }
+    palette_methods = {'coxnet': '#CBE231',
+                       'survivaltree': '#E55E0F',
+                       'nsgp': '#33B9F2',
+                       'gradientboost': '#0B1DBA',
+                       'randomforest': '#6B2106'}
+
+    # create_lineplots_on_single_line_multitree_length(
+    #     base_path=base_path,
+    #     test_size=test_size,
+    #     dataset_names=dataset_names,
+    #     seed_range=seed_range,
+    #     pop_size=pop_size,
+    #     num_gen=num_gen,
+    #     max_size=max_size,
+    #     min_depth=min_depth,
+    #     init_max_height=init_max_height,
+    #     tournament_size=tournament_size,
+    #     min_trees_init=min_trees_init,
+    #     max_trees_init=max_trees_init,
+    #     alpha=alpha,
+    #     l1_ratio_nsgp=l1_ratio_nsgp,
+    #     max_iter_nsgp=max_iter_nsgp,
+    #     how_many_pareto_features=[3, 4, 5, 6, 7],
+    #     dataset_names_acronyms=dataset_names_acronyms,
+    # )
+
+    # median_pareto_front_all_methods(
+    #     base_path=base_path,
+    #     test_size=test_size,
+    #     n_alphas=n_alphas,
+    #     l1_ratio=l1_ratio,
+    #     alpha_min_ratio=alpha_min_ratio,
+    #     max_iter=max_iter,
+    #     dataset_names=dataset_names,
+    #     dataset_names_acronyms=dataset_names_acronyms,
+    #     split_type='Test',
+    #     seed_range=seed_range,
+    #     pop_size=pop_size,
+    #     num_gen=num_gen,
+    #     max_size=max_size,
+    #     min_depth=min_depth,
+    #     init_max_height=init_max_height,
+    #     tournament_size=tournament_size,
+    #     min_trees_init=min_trees_init,
+    #     max_trees_init=max_trees_init,
+    #     alpha=alpha,
+    #     l1_ratio_nsgp=l1_ratio_nsgp,
+    #     max_iter_nsgp=max_iter_nsgp,
+    #     n_max_depths_st=n_max_depths_st,
+    #     n_folds_st=n_folds_st,
+    #     n_max_depths_gb=n_max_depths_gb,
+    #     n_folds_gb=n_folds_gb,
+    #     n_max_depths_rf=n_max_depths_rf,
+    #     n_folds_rf=n_folds_rf,
+    #     palette_methods=palette_methods,
+    # )
 
     # print_some_formulae(
     #     base_path=base_path,
@@ -1131,7 +1976,7 @@ def main():
     #     n_folds_gb=n_folds_gb,
     #     n_max_depths_rf=n_max_depths_rf,
     #     n_folds_rf=n_folds_rf,
-    #     how_many_pareto_features_table=[1, 2, 3, 4, 5, 1000],
+    #     how_many_pareto_features_table=[1, 2, 3, 4, 5, 6, 7, 1000],
     #     methods=['survivaltree', 'coxnet', 'nsgp'],
     # )
     #
@@ -1145,41 +1990,41 @@ def main():
     with open('white_comparisons.json', 'r') as f:
         white_comparisons = json.load(f)
 
-    black_values, black_comparisons = stat_test(
-        base_path=base_path,
-        test_size=test_size,
-        n_alphas=n_alphas,
-        l1_ratio=l1_ratio,
-        alpha_min_ratio=alpha_min_ratio,
-        max_iter=max_iter,
-        normalizes=normalizes,
-        dataset_names=dataset_names,
-        seed_range=seed_range,
-        pop_size=pop_size,
-        num_gen=num_gen,
-        max_size=max_size,
-        min_depth=min_depth,
-        init_max_height=init_max_height,
-        tournament_size=tournament_size,
-        min_trees_init=min_trees_init,
-        max_trees_init=max_trees_init,
-        alpha=alpha,
-        l1_ratio_nsgp=l1_ratio_nsgp,
-        max_iter_nsgp=max_iter_nsgp,
-        n_max_depths_st=n_max_depths_st,
-        n_folds_st=n_folds_st,
-        n_max_depths_gb=n_max_depths_gb,
-        n_folds_gb=n_folds_gb,
-        n_max_depths_rf=n_max_depths_rf,
-        n_folds_rf=n_folds_rf,
-        how_many_pareto_features_table=[1, 2, 3, 4, 5, 1000],
-        methods=['gradientboost', 'randomforest', 'nsgp'],
-    )
-
-    with open('black_values.json', 'w') as f:
-        json.dump(black_values, f, indent=4)
-    with open('black_comparisons.json', 'w') as f:
-        json.dump(black_comparisons, f, indent=4)
+    # black_values, black_comparisons = stat_test(
+    #     base_path=base_path,
+    #     test_size=test_size,
+    #     n_alphas=n_alphas,
+    #     l1_ratio=l1_ratio,
+    #     alpha_min_ratio=alpha_min_ratio,
+    #     max_iter=max_iter,
+    #     normalizes=normalizes,
+    #     dataset_names=dataset_names,
+    #     seed_range=seed_range,
+    #     pop_size=pop_size,
+    #     num_gen=num_gen,
+    #     max_size=max_size,
+    #     min_depth=min_depth,
+    #     init_max_height=init_max_height,
+    #     tournament_size=tournament_size,
+    #     min_trees_init=min_trees_init,
+    #     max_trees_init=max_trees_init,
+    #     alpha=alpha,
+    #     l1_ratio_nsgp=l1_ratio_nsgp,
+    #     max_iter_nsgp=max_iter_nsgp,
+    #     n_max_depths_st=n_max_depths_st,
+    #     n_folds_st=n_folds_st,
+    #     n_max_depths_gb=n_max_depths_gb,
+    #     n_folds_gb=n_folds_gb,
+    #     n_max_depths_rf=n_max_depths_rf,
+    #     n_folds_rf=n_folds_rf,
+    #     how_many_pareto_features_table=[1, 2, 3, 4, 5, 6, 7, 1000],
+    #     methods=['gradientboost', 'randomforest', 'nsgp'],
+    # )
+    #
+    # with open('black_values.json', 'w') as f:
+    #     json.dump(black_values, f, indent=4)
+    # with open('black_comparisons.json', 'w') as f:
+    #     json.dump(black_comparisons, f, indent=4)
 
     with open('black_values.json', 'r') as f:
         black_values = json.load(f)
@@ -1189,15 +2034,15 @@ def main():
     with open('lineplot_data.json', 'r') as f:
         lineplot_data = json.load(f)
 
-    print_table_hv_ci(
-        values=black_values,
-        comparisons=black_comparisons,
-        methods=['gradientboost', 'randomforest', 'nsgp'],
-        methods_acronyms=methods_acronyms,
-        how_many_pareto_features_table=[1, 2, 3, 4, 5, 1000],
-        normalizes=normalizes,
-        dataset_names=dataset_names,
-    )
+    # print_table_hv_ci(
+    #     values=white_values,
+    #     comparisons=white_comparisons,
+    #     methods=['survivaltree', 'coxnet', 'nsgp'],
+    #     methods_acronyms=methods_acronyms,
+    #     how_many_pareto_features_table=[3, 5, 7, 1000],
+    #     normalizes=normalizes,
+    #     dataset_names=dataset_names,
+    # )
 
     # lineplot(
     #     base_path=base_path,
@@ -1218,8 +2063,37 @@ def main():
     #     max_iter_nsgp=max_iter_nsgp,
     #     alpha=alpha,
     #     dataset_acronyms=dataset_names_acronyms,
-    #     how_many_pareto_features=[3, 4, 5, 1000],
+    #     how_many_pareto_features=[1000],
     # )
+
+    for seed_surv_func in [1, 10, 25, 50]:
+        create_survival_function(
+            base_path=base_path,
+            test_size=test_size,
+            dataset_name='framingham',
+            seed=seed_surv_func,
+            n_alphas=n_alphas,
+            l1_ratio=l1_ratio,
+            alpha_min_ratio=alpha_min_ratio,
+            max_iter=max_iter,
+            pop_size=pop_size,
+            num_gen=num_gen,
+            max_size=max_size,
+            min_depth=min_depth,
+            init_max_height=init_max_height,
+            tournament_size=tournament_size,
+            min_trees_init=min_trees_init,
+            max_trees_init=max_trees_init,
+            alpha=alpha,
+            l1_ratio_nsgp=l1_ratio_nsgp,
+            max_iter_nsgp=max_iter_nsgp,
+            n_max_depths_st=n_max_depths_st,
+            n_folds_st=n_folds_st,
+            n_max_depths_gb=n_max_depths_gb,
+            n_folds_gb=n_folds_gb,
+            n_max_depths_rf=n_max_depths_rf,
+            n_folds_rf=n_folds_rf,
+        )
 
 
 
