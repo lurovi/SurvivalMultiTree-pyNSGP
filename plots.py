@@ -114,20 +114,6 @@ def take_formula(data, pareto, n_features_to_consider):
     test_errors = [float(abc) for abc in test_errors.split(' ')]
     n_features = [float(abc) for abc in n_features.split(' ')]
 
-    # offset = 0
-    # while True:
-    #     try:
-    #         ind = n_features.index(n_features_to_consider - offset)
-    #         break
-    #     except ValueError:
-    #         offset += 1
-    #         if n_features_to_consider - offset <= 0:
-    #             ind = -1
-    #             break
-    #
-    # if ind == -1:
-    #     raise ValueError(f'No existing features here.')
-
     ind = n_features.index(n_features_to_consider)
     multi_tree = last_pareto[ind]
     train_error = train_errors[ind]
@@ -294,7 +280,7 @@ def create_survival_function(
         base_path=base_path,
         method='nsgp',
         dataset_name=dataset_name,
-        normalize=False,
+        normalize=True,
         test_size=test_size,
         pop_size=pop_size,
         num_gen=num_gen,
@@ -334,7 +320,7 @@ def create_survival_function(
         alphas=[alpha],
         max_iter=max_iter_nsgp,
         l1_ratio=l1_ratio,
-        normalize=False,
+        normalize=True,
         verbose=False,
         fit_baseline_model=True
     )
@@ -433,7 +419,7 @@ def create_survival_function(
         param_grid=param_grid,
         cv=folds,
         error_score=0.0,
-        n_jobs=1,
+        n_jobs=-1,
         refit=True,
         verbose=False
     ).fit(X_train, y_train)
@@ -495,7 +481,7 @@ def create_survival_function(
         param_grid=param_grid,
         cv=folds,
         error_score=0.0,
-        n_jobs=1,
+        n_jobs=-1,
         refit=True,
         verbose=False
     ).fit(X_train, y_train)
@@ -557,7 +543,7 @@ def create_survival_function(
         param_grid=param_grid,
         cv=folds,
         error_score=0.0,
-        n_jobs=1,
+        n_jobs=-1,
         refit=True,
         verbose=False
     ).fit(X_train, y_train)
@@ -572,6 +558,416 @@ def create_survival_function(
 
     with open(f'survival_function_data_seed{seed}.json', 'w') as f:
         json.dump(data, f, indent=4)
+
+
+def create_survival_function_all(
+        seed_range,
+        base_path,
+        test_size,
+        dataset_name,
+        seed,
+        n_alphas,
+        l1_ratio,
+        alpha_min_ratio,
+        max_iter,
+        pop_size,
+        num_gen,
+        max_size,
+        min_depth,
+        init_max_height,
+        tournament_size,
+        min_trees_init,
+        max_trees_init,
+        alpha,
+        l1_ratio_nsgp,
+        max_iter_nsgp,
+        n_max_depths_st,
+        n_folds_st,
+        n_max_depths_gb,
+        n_folds_gb,
+        n_max_depths_rf,
+        n_folds_rf,
+):
+
+    # seed method timestep values
+    data: dict[str, dict[str, dict[str, list[float]]]] = {}
+
+    param_grid_survival_tree = {
+        "model__estimator__min_samples_split": [2, 5, 8],
+        "model__estimator__min_samples_leaf": [1, 4],
+        "model__estimator__max_features": [0.5, 1.0],
+        "model__estimator__splitter": ["best", "random"],
+    }
+
+    param_grid_gradient_boost = {
+        "model__estimator__loss": ["coxph"],
+        "model__estimator__learning_rate": [0.1, 0.01],
+        "model__estimator__n_estimators": [50, 250],
+        "model__estimator__min_samples_split": [2, 5, 8],
+        "model__estimator__min_samples_leaf": [1, 4],
+        "model__estimator__max_depth": [3, 6, 9],
+    }
+
+    param_grid_random_forest = {
+        "model__estimator__n_estimators": [50, 250],
+        "model__estimator__min_samples_split": [2, 5, 8],
+        "model__estimator__min_samples_leaf": [1, 4],
+        "model__estimator__max_depth": [3, 6, 9],
+    }
+
+    for seed in seed_range:
+        print(seed)
+        data[str(seed)] = {'nsgp': {}, 'coxnet': {}, 'survivaltree': {}, 'gradientboost': {}, 'randomforest': {}}
+
+        # ======================================
+        # NSGP
+        # ======================================
+
+        nsgpd, pareto_nsgpd = read_nsgp(
+            base_path=base_path,
+            method='nsgp',
+            dataset_name=dataset_name,
+            normalize=True,
+            test_size=test_size,
+            pop_size=pop_size,
+            num_gen=num_gen,
+            max_size=max_size,
+            min_depth=min_depth,
+            init_max_height=init_max_height,
+            tournament_size=tournament_size,
+            min_trees_init=min_trees_init,
+            max_trees_init=max_trees_init,
+            alpha=alpha,
+            l1_ratio=l1_ratio_nsgp,
+            max_iter=max_iter_nsgp,
+            seed=seed,
+            load_pareto=True
+        )
+
+        last_pareto = pareto_nsgpd[-1]
+        n_features = list(nsgpd['ParetoObj2'])[-1]
+        n_features = [float(abc) for abc in n_features.split(' ')]
+        i = np.argmax(n_features)
+        tree = last_pareto[i]
+
+        set_random_seed(seed)
+
+        X_train, X_test, y_train, y_test = load_preprocess_data(
+            corr_drop_threshold=0.98,
+            scale_numerical=True,
+            random_state=seed,
+            dataset_name=dataset_name,
+            test_size=test_size
+        )
+        largest_value = 1e+8
+        output = tree(X_train)
+        output.clip(-largest_value, largest_value, out=output)
+        cox = CoxnetSurvivalAnalysis(
+            n_alphas=1,
+            alphas=[alpha],
+            max_iter=max_iter_nsgp,
+            l1_ratio=l1_ratio,
+            normalize=True,
+            verbose=False,
+            fit_baseline_model=True
+        )
+        cox.fit(output, y_train)
+        output = tree(X_test)
+        output.clip(-largest_value, largest_value, out=output)
+
+        times = cox.unique_times_.tolist()
+        probs = cox.predict_survival_function(output, alpha=alpha, return_array=True).T.tolist()
+        for jj in range(len(times)):
+            curr_time = times[jj]
+            curr_prob = probs[jj]
+            if str(curr_time) not in data[str(seed)]['nsgp']:
+                data[str(seed)]['nsgp'][str(curr_time)] = []
+            data[str(seed)]['nsgp'][str(curr_time)].extend(curr_prob)
+
+        # ======================================
+        # COXNET
+        # ======================================
+
+        set_random_seed(seed)
+
+        X_train, X_test, y_train, y_test = load_preprocess_data(
+            corr_drop_threshold=0.98,
+            scale_numerical=True,
+            random_state=seed,
+            dataset_name=dataset_name,
+            test_size=test_size
+        )
+
+        n_features = X_train.shape[1]
+
+        cox = CoxnetSurvivalAnalysis(
+            n_alphas=n_alphas,
+            l1_ratio=l1_ratio,
+            alpha_min_ratio=alpha_min_ratio,
+            max_iter=max_iter,
+            verbose=False,
+            normalize=True,
+            fit_baseline_model=True
+        )
+        cox.fit(X_train, y_train)
+
+        for k in range(1, n_features + 1):
+            result = get_coxnet_at_k_coefs(cox, k)
+            if result is None:
+                continue
+            alpha = float(result[0])
+
+        times = cox.unique_times_.tolist()
+        probs = cox.predict_survival_function(X_test, alpha=alpha, return_array=True).T.tolist()
+        for jj in range(len(times)):
+            curr_time = times[jj]
+            curr_prob = probs[jj]
+            if str(curr_time) not in data[str(seed)]['coxnet']:
+                data[str(seed)]['coxnet'][str(curr_time)] = []
+            data[str(seed)]['coxnet'][str(curr_time)].extend(curr_prob)
+
+        # ======================================
+        # SURVIVAL TREE
+        # ======================================
+
+        X, y = load_dataset(dataset_name=dataset_name)
+        X, y = simple_basic_cast_and_nan_drop(X, y)
+
+        random_state = seed ** 2
+        set_random_seed(random_state)
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=test_size,
+            stratify=[y_i[0] for y_i in y],
+            random_state=random_state
+        )
+
+        n_features = X_train.shape[1]
+        largest_value = 1e+8
+
+        lower, upper = np.percentile([y_i[1] for y_i in y_train], [1, 99])
+        train_times = np.arange(lower, upper)
+        tau_train = train_times[-1]
+
+        lower, upper = np.percentile([y_i[1] for y_i in y_test], [1, 99])
+        test_times = np.arange(lower, upper)
+        tau_test = test_times[-1]
+
+        folds = StratifiedKFold(
+            n_splits=n_folds_st, shuffle=True,
+            random_state=random_state + 50,
+        ).split(X_train, [y_i[0] for y_i in y_train])
+
+        param_grid = param_grid_survival_tree
+        model = SurvivalTree(max_depth=n_max_depths_st, random_state=random_state)
+
+        pipeline = Pipeline(
+            steps=[
+                ('scaler', SimpleStdScalerOneHot(normalize=True)),
+                ('model', as_concordance_index_ipcw_scorer(model, tau=tau_train))
+            ]
+        )
+
+        gcv = GridSearchCV(
+            pipeline,
+            param_grid=param_grid,
+            cv=folds,
+            error_score=0.0,
+            n_jobs=-1,
+            refit=True,
+            verbose=False
+        ).fit(X_train, y_train)
+
+        actual_model = gcv.best_estimator_['model'].estimator
+        actual_scaler = gcv.best_estimator_['scaler']
+
+        times = actual_model.unique_times_.tolist()
+        probs = actual_model.predict_survival_function(actual_scaler.transform(X_test), return_array=True).T.tolist()
+        for jj in range(len(times)):
+            curr_time = times[jj]
+            curr_prob = probs[jj]
+            if str(curr_time) not in data[str(seed)]['survivaltree']:
+                data[str(seed)]['survivaltree'][str(curr_time)] = []
+            data[str(seed)]['survivaltree'][str(curr_time)].extend(curr_prob)
+
+        # ======================================
+        # GRADIENT BOOST
+        # ======================================
+
+        X, y = load_dataset(dataset_name=dataset_name)
+        X, y = simple_basic_cast_and_nan_drop(X, y)
+
+        random_state = seed ** 2
+        set_random_seed(random_state)
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=test_size,
+            stratify=[y_i[0] for y_i in y],
+            random_state=random_state
+        )
+
+        n_features = X_train.shape[1]
+        largest_value = 1e+8
+
+        lower, upper = np.percentile([y_i[1] for y_i in y_train], [1, 99])
+        train_times = np.arange(lower, upper)
+        tau_train = train_times[-1]
+
+        lower, upper = np.percentile([y_i[1] for y_i in y_test], [1, 99])
+        test_times = np.arange(lower, upper)
+        tau_test = test_times[-1]
+
+        folds = StratifiedKFold(
+            n_splits=n_folds_gb, shuffle=True,
+            random_state=random_state + 50,
+        ).split(X_train, [y_i[0] for y_i in y_train])
+
+        param_grid = param_grid_gradient_boost
+        model = GradientBoostingSurvivalAnalysis(random_state=random_state)
+
+        pipeline = Pipeline(
+            steps=[
+                ('scaler', SimpleStdScalerOneHot(normalize=True)),
+                ('model', as_concordance_index_ipcw_scorer(model, tau=tau_train))
+            ]
+        )
+
+        gcv = GridSearchCV(
+            pipeline,
+            param_grid=param_grid,
+            cv=folds,
+            error_score=0.0,
+            n_jobs=-1,
+            refit=True,
+            verbose=False
+        ).fit(X_train, y_train)
+
+        actual_model = gcv.best_estimator_['model'].estimator
+        actual_scaler = gcv.best_estimator_['scaler']
+
+        times = actual_model.unique_times_.tolist()
+        probs = actual_model.predict_survival_function(actual_scaler.transform(X_test), return_array=True).T.tolist()
+        for jj in range(len(times)):
+            curr_time = times[jj]
+            curr_prob = probs[jj]
+            if str(curr_time) not in data[str(seed)]['gradientboost']:
+                data[str(seed)]['gradientboost'][str(curr_time)] = []
+            data[str(seed)]['gradientboost'][str(curr_time)].extend(curr_prob)
+
+        # ======================================
+        # RANDOM FOREST
+        # ======================================
+
+        X, y = load_dataset(dataset_name=dataset_name)
+        X, y = simple_basic_cast_and_nan_drop(X, y)
+
+        random_state = seed ** 2
+        set_random_seed(random_state)
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=test_size,
+            stratify=[y_i[0] for y_i in y],
+            random_state=random_state
+        )
+
+        n_features = X_train.shape[1]
+        largest_value = 1e+8
+
+        lower, upper = np.percentile([y_i[1] for y_i in y_train], [1, 99])
+        train_times = np.arange(lower, upper)
+        tau_train = train_times[-1]
+
+        lower, upper = np.percentile([y_i[1] for y_i in y_test], [1, 99])
+        test_times = np.arange(lower, upper)
+        tau_test = test_times[-1]
+
+        folds = StratifiedKFold(
+            n_splits=n_folds_rf, shuffle=True,
+            random_state=random_state + 50,
+        ).split(X_train, [y_i[0] for y_i in y_train])
+
+        param_grid = param_grid_random_forest
+        model = RandomSurvivalForest(random_state=random_state)
+
+        pipeline = Pipeline(
+            steps=[
+                ('scaler', SimpleStdScalerOneHot(normalize=True)),
+                ('model', as_concordance_index_ipcw_scorer(model, tau=tau_train))
+            ]
+        )
+
+        gcv = GridSearchCV(
+            pipeline,
+            param_grid=param_grid,
+            cv=folds,
+            error_score=0.0,
+            n_jobs=-1,
+            refit=True,
+            verbose=False
+        ).fit(X_train, y_train)
+
+        actual_model = gcv.best_estimator_['model'].estimator
+        actual_scaler = gcv.best_estimator_['scaler']
+
+        times = actual_model.unique_times_.tolist()
+        probs = actual_model.predict_survival_function(actual_scaler.transform(X_test), return_array=True).T.tolist()
+        for jj in range(len(times)):
+            curr_time = times[jj]
+            curr_prob = probs[jj]
+            if str(curr_time) not in data[str(seed)]['randomforest']:
+                data[str(seed)]['randomforest'][str(curr_time)] = []
+            data[str(seed)]['randomforest'][str(curr_time)].extend(curr_prob)
+
+    with open(f'survival_function_data_seedALL.json', 'w') as f:
+        json.dump(data, f, indent=4)
+
+
+def create_survival_function_lineplot(surv_func_data, palette_methods):
+    # PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
+
+    preamble = r'''
+                \usepackage{amsmath}
+                \usepackage{libertine}
+                '''
+
+    PLOT_ARGS = {'rcParams': {'text.latex.preamble': preamble, 'pdf.fonttype': 42, 'ps.fonttype': 42}}
+
+    fastplot.plot(None, f'surv_func_lineplot.pdf', mode='callback',
+                  callback=lambda plt: my_callback_create_survival_function_lineplot(plt, surv_func_data, palette_methods), style='latex',
+                  **PLOT_ARGS)
+
+
+def my_callback_create_survival_function_lineplot(plt, surv_func_data, palette_methods):
+    fig, ax = plt.subplots(figsize=(6, 6), layout='constrained')
+
+    x = []
+    for method in palette_methods:
+        x.extend(surv_func_data[f'{method}_times'])
+
+    x = sorted(list(set(x)))
+
+    for method in palette_methods:
+        ax.plot(surv_func_data[f'{method}_times'], surv_func_data[f'{method}_probs'], label='', color=palette_methods[method], linestyle='-', linewidth=1.5, markersize=10)
+
+    ax.set_xlim(min(x) - 10, max(x) + 10)
+    ax.set_xticks([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
+                  labels=[1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
+                  fontsize=30.0)
+
+    ax.set_ylim(0.58, 1.02)
+    ax.set_yticks([0.6, 0.7, 0.8, 0.9, 1.0], labels=[0.6, 0.7, 0.8, 0.9, 1.0], fontsize=30.0)
+
+    ax.tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
+    ax.set_xlabel('Time', fontsize=17.0)
+    ax.set_ylabel('Survival Probability', fontsize=17.0)
+    ax.grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+
 
 
 def print_some_formulae(
@@ -1040,7 +1436,7 @@ def median_pareto_front_all_methods(
                         base_path=base_path,
                         method=method,
                         dataset_name=dataset_name,
-                        normalize=False,
+                        normalize=True,
                         test_size=test_size,
                         pop_size=pop_size,
                         num_gen=num_gen,
@@ -1066,15 +1462,17 @@ def median_pareto_front_all_methods(
                     compared_c_indexes = [temp_error for temp_error, temp_feats in zip(errors_list, n_features_list)]
                     if len(compared_c_indexes) == 0:
                         compared_c_indexes = [0.0]
-                    compared_c_index = compared_c_indexes[0]
-                    values[dataset_name][method].append(compared_c_index)
+                    else:
+                        compared_c_index = compared_c_indexes[0]
+                        values[dataset_name][method].append(compared_c_index)
                 else:
                     cx_pairs_pareto = [[temp_error, temp_feats] for temp_error, temp_feats in zip(errors_list, n_features_list)]
                     if len(cx_pairs_pareto) == 0:
                         cx_pairs_pareto = [[0.0, n_features]]
-                    cx_pairs_pareto = filter_non_dominated_only(cx_pairs_pareto)
-                    values[dataset_name][method].append(HV(ref_point)(np.array(cx_pairs_pareto)))
-                    paretos[dataset_name][method].append(cx_pairs_pareto)
+                    else:
+                        cx_pairs_pareto = filter_non_dominated_only(cx_pairs_pareto)
+                        values[dataset_name][method].append(HV(ref_point)(np.array(cx_pairs_pareto)))
+                        paretos[dataset_name][method].append(cx_pairs_pareto)
 
     for dataset_name in dataset_names:
         for method in methods:
@@ -1098,7 +1496,7 @@ def median_pareto_front_all_methods(
     PLOT_ARGS = {'rcParams': {'text.latex.preamble': preamble, 'pdf.fonttype': 42, 'ps.fonttype': 42}}
 
     fastplot.plot(None, f'pareto_all_methods.pdf', mode='callback',
-                  callback=lambda plt: my_callback_pareto_all_methods(plt, medians, actual_paretos, palette_methods, dataset_names, dataset_names_acronyms), style='latex',
+                  callback=lambda plt: my_callback_pareto_all_methods_2(plt, medians, actual_paretos, palette_methods, dataset_names, dataset_names_acronyms), style='latex',
                   **PLOT_ARGS)
 
 
@@ -1126,12 +1524,12 @@ def my_callback_pareto_all_methods(plt, medians, actual_paretos, palette_methods
         ax[i, 0].set_xticks([-0.80, -0.75, -0.70, -0.65, -0.60, -0.55])
         ax[i, 0].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
         if i == len(dataset_names) - 1:
-            ax[i, 0].set_xlabel('$f_1$')
+            ax[i, 0].set_xlabel(r'$\textit{obj}_1$')
         else:
             ax[i, 0].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
             ax[i, 0].tick_params(labelbottom=False)
             ax[i, 0].set_xticklabels([])
-        ax[i, 0].set_ylabel('$f_2$')
+        ax[i, 0].set_ylabel(r'$\textit{obj}_2$')
 
         axttt = ax[i, 0].twinx()
         axttt.set_ylabel(acronym, rotation=270, labelpad=14)
@@ -1147,6 +1545,69 @@ def my_callback_pareto_all_methods(plt, medians, actual_paretos, palette_methods
 
         # ax[i, 0].set_title(f'Methods Pareto Front ({metric} across all datasets and repetitions)')
         ax[i, 0].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+
+
+def my_callback_pareto_all_methods_2(plt, medians, actual_paretos, palette_methods, dataset_names, dataset_names_acronyms):
+    fig, ax = plt.subplots(1, len(dataset_names), figsize=(18, 4), layout='constrained', squeeze=False)
+
+    markers = {'coxnet': 'o', 'survivaltree': '^', 'nsgp': '*'}
+
+    for i in range(len(dataset_names)):
+        dataset_name = dataset_names[i]
+        acronym = dataset_names_acronyms[dataset_name]
+        for method in markers:
+            for pair in actual_paretos[dataset_name][method]:
+                err, size = pair[0], pair[1]
+                ax[0, i].scatter(err, size, c=palette_methods[method], marker=markers[method], s=50, edgecolor='black', linewidth=0.5)
+
+        ax[0, i].axvline(medians[dataset_name]['gradientboost'], c=palette_methods['gradientboost'], linewidth=1.2, linestyle='-')
+        ax[0, i].axvline(medians[dataset_name]['randomforest'], c=palette_methods['randomforest'], linewidth=1.2, linestyle='-')
+
+        ax[0, i].set_ylim(-1, 33)
+        ax[0, i].set_yticks(list(range(1, 35 + 1, 5)))
+        #ax[0, i].set_xlim(-0.88, -0.52)
+        #ax[0, i].set_xticks([-0.80, -0.70, -0.60])
+        if dataset_name == 'pbc2':
+            ax[0, i].set_xlim(-0.85, -0.65)
+            ax[0, i].set_xticks([-0.80, -0.75, -0.70])
+        elif dataset_name == 'support2':
+            ax[0, i].set_xlim(-0.71, -0.59)
+            ax[0, i].set_xticks([-0.70, -0.65, -0.60])
+        elif dataset_name == 'framingham':
+            ax[0, i].set_xlim(-0.78, -0.62)
+            ax[0, i].set_xticks([-0.75, -0.70, -0.65])
+        elif dataset_name == 'breast_cancer_metabric':
+            ax[0, i].set_xlim(-0.70, -0.50)
+            ax[0, i].set_xticks([-0.65, -0.60, -0.55])
+        elif dataset_name == 'breast_cancer_metabric_relapse':
+            ax[0, i].set_xlim(-0.67, -0.53)
+            ax[0, i].set_xticks([-0.65, -0.60, -0.55])
+        else:
+            raise AttributeError(f'{dataset_name} as dataset not recognized for this plot.')
+
+        ax[0, i].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
+        if i == 0:
+            ax[0, i].set_ylabel(r'$\textit{obj}_2$', fontsize=18)
+        else:
+            ax[0, i].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
+            ax[0, i].tick_params(labelleft=False)
+            ax[0, i].set_yticklabels([])
+        ax[0, i].set_xlabel(r'$\textit{obj}_1$', fontsize=18)
+
+        # axttt = ax[0, i].twinx()
+        # axttt.set_ylabel(acronym, rotation=270, labelpad=14)
+        # axttt.yaxis.set_label_position("right")
+        # axttt.tick_params(labelleft=False)
+        # axttt.set_yticklabels([])
+        # axttt.yaxis.tick_right()
+        # axttt.tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
+        ax[0, i].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
+
+        if i == len(dataset_names) - 1:
+            ax[0, i].tick_params(pad=7)
+        ax[0, i].set_title(acronym)
+        # ax[0, i].set_title(f'Methods Pareto Front ({metric} across all datasets and repetitions)')
+        ax[0, i].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
 
 
 
@@ -1357,13 +1818,25 @@ def stat_test(
                             compared_c_indexes = [-temp_error for temp_error, temp_feats in zip(errors_list, n_features_list) if temp_feats == (k if k < 1000 and method not in opaque_methods else max(n_features_list))]
                             if len(compared_c_indexes) == 0:
                                 compared_c_indexes = [0.0]
-                            compared_c_index = compared_c_indexes[0]
-                            values[split_type]['CI'][k][normalize][dataset_name][method].append(compared_c_index)
+                            else:
+                                compared_c_index = compared_c_indexes[0]
+                                values[split_type]['CI'][k][normalize][dataset_name][method].append(compared_c_index)
 
                             cx_pairs_pareto = np.array([[temp_error, temp_feats] for temp_error, temp_feats in zip(errors_list, n_features_list) if temp_feats <= k])
                             if len(cx_pairs_pareto) == 0:
                                 cx_pairs_pareto = np.array([ref_point])
-                            values[split_type]['HV'][k][normalize][dataset_name][method].append(HV(ref_point)(cx_pairs_pareto))
+                            else:
+                                values[split_type]['HV'][k][normalize][dataset_name][method].append(HV(ref_point)(cx_pairs_pareto))
+
+    for split_type in ['Train', 'Test']:
+        for k in how_many_pareto_features_table:
+            for normalize in normalizes:
+                for dataset_name in dataset_names:
+                    for metric in ['CI', 'HV']:
+                        for method in methods:
+                            if len(values[split_type][metric][k][normalize][dataset_name][method]) == 0:
+                                values[split_type][metric][k][normalize][dataset_name][method] = [0.0] * len(seed_range)
+
 
     for split_type in ['Train', 'Test']:
         for k in how_many_pareto_features_table:
@@ -1423,7 +1896,7 @@ def print_table_hv_ci(
                     ci_bold = ''
                     hv_star = ''
                     ci_star = ''
-                    if hv_median == hv_median_max:
+                    if hv_median == hv_median_max or hv_num_outperformed_methods == num_methods:
                         hv_bold = '\\bfseries '
                     if ci_median == ci_median_max or ci_num_outperformed_methods == num_methods:
                         ci_bold = '\\bfseries '
@@ -1826,43 +2299,43 @@ def main():
     #     dataset_names_acronyms=dataset_names_acronyms,
     # )
 
-    # median_pareto_front_all_methods(
-    #     base_path=base_path,
-    #     test_size=test_size,
-    #     n_alphas=n_alphas,
-    #     l1_ratio=l1_ratio,
-    #     alpha_min_ratio=alpha_min_ratio,
-    #     max_iter=max_iter,
-    #     dataset_names=dataset_names,
-    #     dataset_names_acronyms=dataset_names_acronyms,
-    #     split_type='Test',
-    #     seed_range=seed_range,
-    #     pop_size=pop_size,
-    #     num_gen=num_gen,
-    #     max_size=max_size,
-    #     min_depth=min_depth,
-    #     init_max_height=init_max_height,
-    #     tournament_size=tournament_size,
-    #     min_trees_init=min_trees_init,
-    #     max_trees_init=max_trees_init,
-    #     alpha=alpha,
-    #     l1_ratio_nsgp=l1_ratio_nsgp,
-    #     max_iter_nsgp=max_iter_nsgp,
-    #     n_max_depths_st=n_max_depths_st,
-    #     n_folds_st=n_folds_st,
-    #     n_max_depths_gb=n_max_depths_gb,
-    #     n_folds_gb=n_folds_gb,
-    #     n_max_depths_rf=n_max_depths_rf,
-    #     n_folds_rf=n_folds_rf,
-    #     palette_methods=palette_methods,
-    # )
+    median_pareto_front_all_methods(
+        base_path=base_path,
+        test_size=test_size,
+        n_alphas=n_alphas,
+        l1_ratio=l1_ratio,
+        alpha_min_ratio=alpha_min_ratio,
+        max_iter=max_iter,
+        dataset_names=dataset_names,
+        dataset_names_acronyms=dataset_names_acronyms,
+        split_type='Test',
+        seed_range=seed_range,
+        pop_size=pop_size,
+        num_gen=num_gen,
+        max_size=max_size,
+        min_depth=min_depth,
+        init_max_height=init_max_height,
+        tournament_size=tournament_size,
+        min_trees_init=min_trees_init,
+        max_trees_init=max_trees_init,
+        alpha=alpha,
+        l1_ratio_nsgp=l1_ratio_nsgp,
+        max_iter_nsgp=max_iter_nsgp,
+        n_max_depths_st=n_max_depths_st,
+        n_folds_st=n_folds_st,
+        n_max_depths_gb=n_max_depths_gb,
+        n_folds_gb=n_folds_gb,
+        n_max_depths_rf=n_max_depths_rf,
+        n_folds_rf=n_folds_rf,
+        palette_methods=palette_methods,
+    )
 
     # print_some_formulae(
     #     base_path=base_path,
     #     test_size=test_size,
     #     normalize=False,
     #     dataset_names=dataset_names,
-    #     seed=7,
+    #     seed=13,
     #     pop_size=pop_size,
     #     num_gen=num_gen,
     #     max_size=max_size,
@@ -1874,7 +2347,7 @@ def main():
     #     alpha=alpha,
     #     l1_ratio_nsgp=l1_ratio_nsgp,
     #     max_iter_nsgp=max_iter_nsgp,
-    #     how_many_pareto_features=[3, 4, 5],
+    #     how_many_pareto_features=[3, 5, 7],
     #     dataset_names_acronyms=dataset_names_acronyms
     # )
 
@@ -2034,10 +2507,15 @@ def main():
     with open('lineplot_data.json', 'r') as f:
         lineplot_data = json.load(f)
 
+    with open(f'survival_function_data_seed{25}.json', 'r') as f:
+        surv_func_data = json.load(f)
+
+    # create_survival_function_lineplot(surv_func_data, palette_methods)
+
     # print_table_hv_ci(
-    #     values=white_values,
-    #     comparisons=white_comparisons,
-    #     methods=['survivaltree', 'coxnet', 'nsgp'],
+    #     values=black_values,
+    #     comparisons=black_comparisons,
+    #     methods=['gradientboost', 'randomforest', 'nsgp'],
     #     methods_acronyms=methods_acronyms,
     #     how_many_pareto_features_table=[3, 5, 7, 1000],
     #     normalizes=normalizes,
@@ -2066,34 +2544,34 @@ def main():
     #     how_many_pareto_features=[1000],
     # )
 
-    for seed_surv_func in [1, 10, 25, 50]:
-        create_survival_function(
-            base_path=base_path,
-            test_size=test_size,
-            dataset_name='framingham',
-            seed=seed_surv_func,
-            n_alphas=n_alphas,
-            l1_ratio=l1_ratio,
-            alpha_min_ratio=alpha_min_ratio,
-            max_iter=max_iter,
-            pop_size=pop_size,
-            num_gen=num_gen,
-            max_size=max_size,
-            min_depth=min_depth,
-            init_max_height=init_max_height,
-            tournament_size=tournament_size,
-            min_trees_init=min_trees_init,
-            max_trees_init=max_trees_init,
-            alpha=alpha,
-            l1_ratio_nsgp=l1_ratio_nsgp,
-            max_iter_nsgp=max_iter_nsgp,
-            n_max_depths_st=n_max_depths_st,
-            n_folds_st=n_folds_st,
-            n_max_depths_gb=n_max_depths_gb,
-            n_folds_gb=n_folds_gb,
-            n_max_depths_rf=n_max_depths_rf,
-            n_folds_rf=n_folds_rf,
-        )
+   # for seed_surv_func in [1, 10, 25, 50]:
+   #     create_survival_function(
+   #         base_path=base_path,
+   #         test_size=test_size,
+   #         dataset_name='framingham',
+   #         seed=seed_surv_func,
+   #         n_alphas=n_alphas,
+   #         l1_ratio=l1_ratio,
+   #         alpha_min_ratio=alpha_min_ratio,
+   #         max_iter=max_iter,
+   #         pop_size=pop_size,
+   #         num_gen=num_gen,
+   #         max_size=max_size,
+   #         min_depth=min_depth,
+   #         init_max_height=init_max_height,
+   #         tournament_size=tournament_size,
+   #         min_trees_init=min_trees_init,
+   #         max_trees_init=max_trees_init,
+   #         alpha=alpha,
+   #         l1_ratio_nsgp=l1_ratio_nsgp,
+   #         max_iter_nsgp=max_iter_nsgp,
+   #         n_max_depths_st=n_max_depths_st,
+   #         n_folds_st=n_folds_st,
+   #         n_max_depths_gb=n_max_depths_gb,
+   #         n_folds_gb=n_folds_gb,
+   #         n_max_depths_rf=n_max_depths_rf,
+   #         n_folds_rf=n_folds_rf,
+   #     )
 
 
 
