@@ -4,6 +4,7 @@ from typing import Any
 
 import os.path
 
+from scipy.stats import pearsonr
 from sklearn.pipeline import Pipeline
 from sksurv.metrics import as_concordance_index_ipcw_scorer
 from pynsgp.Utils.data import SimpleStdScalerOneHot
@@ -26,7 +27,8 @@ from methods import set_random_seed, load_preprocess_data, get_coxnet_at_k_coefs
 from pynsgp.Utils.pickle_persist import decompress_pickle, decompress_dill
 from pynsgp.Utils.data import load_dataset, nsgp_path_string, cox_net_path_string, survival_ensemble_tree_path_string, \
     simple_basic_cast_and_nan_drop
-from pynsgp.Utils.stats import is_mannwhitneyu_passed, is_kruskalwallis_passed, perform_mannwhitneyu_holm_bonferroni
+from pynsgp.Utils.stats import is_mannwhitneyu_passed, is_kruskalwallis_passed, perform_mannwhitneyu_holm_bonferroni, \
+    create_results_dict
 
 import warnings
 import yaml
@@ -565,7 +567,6 @@ def create_survival_function_all(
         base_path,
         test_size,
         dataset_name,
-        seed,
         n_alphas,
         l1_ratio,
         alpha_min_ratio,
@@ -955,13 +956,16 @@ def my_callback_create_survival_function_lineplot(plt, surv_func_data, palette_m
     for method in palette_methods:
         ax.plot(surv_func_data[f'{method}_times'], surv_func_data[f'{method}_probs'], label='', color=palette_methods[method], linestyle='-', linewidth=1.5, markersize=10)
 
-    ax.set_xlim(min(x) - 10, max(x) + 10)
-    ax.set_xticks([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
-                  labels=[1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
-                  fontsize=30.0)
+    ax.set_xlim(min(x), 310)
+    xticks = [0, 50, 100, 150, 200, 250, 300]
+    #ax.set_xticks([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
+    #              labels=[1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
+    #              fontsize=30.0)
 
-    ax.set_ylim(0.58, 1.02)
-    ax.set_yticks([0.6, 0.7, 0.8, 0.9, 1.0], labels=[0.6, 0.7, 0.8, 0.9, 1.0], fontsize=30.0)
+    ax.set_xticks(xticks, labels=xticks, fontsize=30.0)
+
+    ax.set_ylim(0.0, 1.02)
+    #ax.set_yticks([0.6, 0.7, 0.8, 0.9, 1.0], labels=[0.6, 0.7, 0.8, 0.9, 1.0], fontsize=30.0)
 
     ax.tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
     ax.set_xlabel('Time', fontsize=17.0)
@@ -1234,6 +1238,8 @@ def create_lineplots_on_single_line_multitree_length(
 
     # dataset k values
     lineplot_data = {dataset_name: {k: [] for k in how_many_pareto_features} for dataset_name in dataset_names}
+    lineplot_data_medians = {dataset_name: {k: 0.0 for k in how_many_pareto_features} for dataset_name in dataset_names}
+
     for dataset_name in dataset_names:
         for seed in seed_range:
             nsgpd, _ = read_nsgp(
@@ -1266,6 +1272,21 @@ def create_lineplots_on_single_line_multitree_length(
                     compared_n_trees = [0]
                 compared_n_tree = compared_n_trees[0]
                 lineplot_data[dataset_name][k].append(compared_n_tree)
+
+    all_k_s = []
+    all_median_s = []
+
+    for dataset_name in dataset_names:
+        for k in how_many_pareto_features:
+            lineplot_data_medians[dataset_name][k] = statistics.median(lineplot_data[dataset_name][k])
+
+    for dataset_name in dataset_names:
+        for k in how_many_pareto_features:
+            all_k_s.append(k)
+            all_median_s.append(lineplot_data_medians[dataset_name][k])
+
+    print('Pearson Correlation between k and median number of expressions across all datasets:')
+    print(pearsonr(all_k_s, all_median_s))
 
     # PLOT_ARGS = {'rcParams': {'text.latex.preamble': r'\usepackage{amsmath}'}}
 
@@ -1316,7 +1337,7 @@ def my_callback_multitree_length_lineplot(plt, lineplot_data, dataset_names, dat
         ax[0, i].set_xlabel('$k$')
 
         if i == 0:
-            ax[0, i].set_ylabel('Multi-Tree Length')
+            ax[0, i].set_ylabel('Number of Expressions', fontsize=10)
         else:
             ax[0, i].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
             ax[0, i].tick_params(labelleft=False)
@@ -1524,7 +1545,7 @@ def my_callback_pareto_all_methods(plt, medians, actual_paretos, palette_methods
         ax[i, 0].set_xticks([-0.80, -0.75, -0.70, -0.65, -0.60, -0.55])
         ax[i, 0].tick_params(axis='both', which='both', reset=False, bottom=False, top=False, left=False, right=False)
         if i == len(dataset_names) - 1:
-            ax[i, 0].set_xlabel(r'$\textit{obj}_1$')
+            ax[i, 0].set_xlabel(r'$- \textit{obj}_1$')
         else:
             ax[i, 0].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
             ax[i, 0].tick_params(labelbottom=False)
@@ -1592,7 +1613,7 @@ def my_callback_pareto_all_methods_2(plt, medians, actual_paretos, palette_metho
             ax[0, i].grid(True, axis='both', which='major', color='gray', linestyle='--', linewidth=0.5)
             ax[0, i].tick_params(labelleft=False)
             ax[0, i].set_yticklabels([])
-        ax[0, i].set_xlabel(r'$\textit{obj}_1$', fontsize=18)
+        ax[0, i].set_xlabel(r'$- \textit{obj}_1$', fontsize=18)
 
         # axttt = ax[0, i].twinx()
         # axttt.set_ylabel(acronym, rotation=270, labelpad=14)
@@ -1652,6 +1673,8 @@ def stat_test(
         'Train': {'HV': {}, 'CI': {}},
         'Test': {'HV': {}, 'CI': {}},
     }
+
+    train_time: list[float] = []
 
     opaque_methods = ('gradientboost', 'randomforest')
 
@@ -1785,7 +1808,9 @@ def stat_test(
                                     seed=seed,
                                     load_pareto=False
                                 )
-
+                                this_time = sum(list(csv_data['TrainTime']))
+                                if not normalize and split_type == 'Test' and k >= 1000:
+                                    train_time.append(this_time)
                                 n_features_list = [float(val) for val in csv_data.loc[num_gen - 1, 'ParetoObj2'].split(' ')]
                                 errors_list = [float(val) for val in csv_data.loc[num_gen - 1, split_type + 'ParetoObj1'].split(' ')]
                             elif method == 'randomsearch':
@@ -1827,6 +1852,11 @@ def stat_test(
                                 cx_pairs_pareto = np.array([ref_point])
                             else:
                                 values[split_type]['HV'][k][normalize][dataset_name][method].append(HV(ref_point)(cx_pairs_pareto))
+
+    print('TIMES')
+    all_the_times = create_results_dict(train_time)
+    del all_the_times['scores']
+    print(all_the_times)
 
     for split_type in ['Train', 'Test']:
         for k in how_many_pareto_features_table:
@@ -2452,7 +2482,7 @@ def main():
     #     how_many_pareto_features_table=[1, 2, 3, 4, 5, 6, 7, 1000],
     #     methods=['survivaltree', 'coxnet', 'nsgp'],
     # )
-    #
+
     # with open('white_values.json', 'w') as f:
     #     json.dump(white_values, f, indent=4)
     # with open('white_comparisons.json', 'w') as f:
@@ -2507,7 +2537,7 @@ def main():
     with open('lineplot_data.json', 'r') as f:
         lineplot_data = json.load(f)
 
-    with open(f'survival_function_data_seed{25}.json', 'r') as f:
+    with open(f'survival_function_data_seed{50}.json', 'r') as f:
         surv_func_data = json.load(f)
 
     # create_survival_function_lineplot(surv_func_data, palette_methods)
