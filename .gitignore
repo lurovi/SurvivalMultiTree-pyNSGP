@@ -1,7 +1,7 @@
 # Data
 results/
 run_with_exceptions/
-
+slurm/
 
 # Taken from https://github.com/github/gitignore
 
