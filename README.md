@@ -63,7 +63,7 @@ You can run the main (without using verbose or profile) also by doing (must spec
 ./scripts/run_main.sh method nsgp seed 42 dataset support2 normalize 1 test_size 0.3 config ../SurvivalMultiTree-pyNSGP-DATA/config_nsgp.yaml run_id test
 ```
 
-In order to parallelize multiple runs, you must firstly use the 'generate\_parallelize\_input\_files.py' script to generate the .txt file containint the parallel runs to execute.
+In order to parallelize multiple runs, you must firstly use the 'generate\_parallelize\_input\_files.py' script to generate the .txt file containing the parallel runs to execute.
 Suppose you have a parameters .json file detailing the combinations of parameters to be executed as runs:
 
 ```json
@@ -83,17 +83,17 @@ By executing:
 python3 generate_parallelize_input_files.py --json_path ../SurvivalMultiTree-pyNSGP-DATA/params/example_nsgp.json 
 ```
 
-A 'exaple_nsgp.txt' file will be created within the '../SurvivalMultiTree-pyNSGP-DATA/params/' folder. Each line of this file represents a specific run with a given set of parameters. This .txt file contains the runs derived by the cartesion product of all the parameters in the provided .json file.
+an 'example_nsgp.txt' file will be created within the '../SurvivalMultiTree-pyNSGP-DATA/params/' folder. Each line of this file represents a specific run with a given set of parameters. This .txt file contains the runs derived by the cartesion product of all the parameters in the provided .json file.
 
 By doing:
 
 ```bash
 ./scripts/parallelize_main.sh ../SurvivalMultiTree-pyNSGP-DATA/params/example_nsgp.txt 6 
 ```
-The runs in the .txt file will be executed in parallel by using 6 cores from your computer, one core for each run.
+the runs in the .txt file will be executed in parallel by using 6 cores from your computer, one core for each run.
 The lines corresponding to completed and successful runs are logged within a .txt file in the results folder by using as run_id the name of the parallelizable .txt file.
 
 # Sklearn estimator
 
-This library offers a sklearn-based estimator that can be directly used within Python code. An example of Python script is shown in the 'example.py'.
+This library offers a sklearn-based estimator that can be directly used within Python code. An example of Python script is shown in the 'example.py'. Each tree in a multi-tree can be converted into a sympy expression as shown in the example script.
 

@@ -9,6 +9,7 @@ from genepro.variation import (
 )
 from methods import load_preprocess_data, set_random_seed
 import warnings
+from sympy.parsing.sympy_parser import parse_expr
 from sklearn.exceptions import ConvergenceWarning
 
 warnings.filterwarnings("ignore", category=SyntaxWarning)
@@ -92,7 +93,7 @@ def example():
     nsgp.fit(X_train, y_train) # It actually uses the X_train and y_train you pass in the constructor
     
     output = nsgp.nsgp_
-    best_front = output.latest_front
+    best_front = sorted(output.latest_front, key=lambda x: -x.objectives[0])
     
     print(f"Number of solutions in the front: {len(best_front)}.")
     print()
@@ -102,12 +103,26 @@ def example():
         solution = best_front[i]
         print(f'SOLUTION {i}')
         print(f'{str(solution)}')
+        print(f'All coefficients (including zeros): {solution.coefficients}.')
+        print(f'Offset: {solution.offset}.')
         print(f'Number of trees: {solution.number_of_actual_trees()}.')
         print(f'Size of the tree with the maximum number of nodes: {len(solution)}.')
         print(f'Latex formula:')
         print(f'{solution.latex_expression()}')
         print()
         print()
+    print()
+    print()
+    # Taking the multi-tree in the front with the highest accuracy
+    best_solution = best_front[-1]
+    # Printing each tree in the best multi-tree
+    trees = best_solution.trees
+    for i in range(len(trees)):
+        tree = trees[i]
+        print(f'TREE {i}')
+        print(f'{tree.get_readable_repr()}')
+        sympy_formula = parse_expr(tree.get_readable_repr().replace('^', '**'), evaluate=True)
+        print(f'Sympy Formula: {sympy_formula}.')
 
 
 if __name__ == '__main__':
