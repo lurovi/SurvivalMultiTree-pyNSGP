@@ -123,6 +123,9 @@ def example():
         print(f'{tree.get_readable_repr()}')
         sympy_formula = parse_expr(tree.get_readable_repr().replace('^', '**'), evaluate=True)
         print(f'Sympy Formula: {sympy_formula}.')
+    print()
+    # Printing the sympy version of the entire best multi-tree including coefficients and offset
+    print(f'Sympy Formula of the entire multi-tree: {best_solution.to_sympy()}.')
 
 
 if __name__ == '__main__':

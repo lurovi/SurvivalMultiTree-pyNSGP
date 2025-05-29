@@ -34,7 +34,7 @@ class MultiTree:
         lengths = [len(self.trees[tree_index]) for tree_index in self.actual_trees_indices]
         return max(lengths)
 
-    def latex_expression(self, round_precision: int = 3, perform_simplification: bool = True) -> str:
+    def to_sympy(self, round_precision: int = 3, perform_simplification: bool = True):
         strings_representations = [self.trees[tree_index].get_readable_repr() for tree_index in self.actual_trees_indices]
         strings_representations = [str(simplify(parse_expr(formula.replace('^', '**'), evaluate=True))) for formula in strings_representations]
         actual_coefficients = [str(self.coefficients[tree_index]) for tree_index in self.actual_trees_indices]
@@ -46,6 +46,10 @@ class MultiTree:
         else:
             formula = parse_expr(original_formula.replace('^', '**'), evaluate=True)
         formula = formula.xreplace({n: round(float(n), round_precision) for n in formula.atoms() if n.is_Float})
+        return formula
+    
+    def latex_expression(self, round_precision: int = 3, perform_simplification: bool = True) -> str:
+        formula = self.to_sympy(round_precision=round_precision, perform_simplification=perform_simplification)
         formula = latex(formula)
         return formula
 
