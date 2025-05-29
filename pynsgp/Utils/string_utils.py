@@ -1,3 +1,6 @@
+import re
+
+
 def only_first_char_upper(s: str) -> str:
     return s[0].upper() + s[1:]
 
@@ -47,4 +50,29 @@ def acronym(s: str, n_chars: int = 3) -> str:
             count += 1
     res = res + digits
     return res
+
+def is_valid_filename(filename: str) -> bool:
+    """Check if a given filename is valid for the current OS."""
+
+    # Check if the filename is empty or too long
+    if not filename or len(filename) > 255:
+        return False
+
+    # Forbidden characters
+    forbidden_chars = r'[<>:"/\\|?*]'
+
+    # Check for forbidden characters
+    if re.search(forbidden_chars, filename):
+        return False
+
+    # Reserved filenames (case-insensitive check)
+    reserved_names = {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    }
+    if filename.split('.')[0].upper() in reserved_names:
+        return False
+
+    return True
 

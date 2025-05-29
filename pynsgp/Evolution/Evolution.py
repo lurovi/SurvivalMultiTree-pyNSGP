@@ -41,7 +41,8 @@ class pyNSGP:
 		verbose=False,
 		partition_features=False,
 		min_trees_init=1,
-		max_trees_init=5
+		max_trees_init=5,
+		save_output=False
 	):
 
 		self.path = path
@@ -79,6 +80,8 @@ class pyNSGP:
 		self.max_trees_init = max_trees_init
 
 		self.random_search = self.max_generations == 1
+		
+		self.save_output = save_output
 	
 
 	def __ShouldTerminate(self):
@@ -307,8 +310,9 @@ class pyNSGP:
 			if self.verbose:
 				print ('g:',self.generations,'elite obj1:', np.round(self.fitness_function.elite.objectives[0],4), ', obj2:', np.round(self.fitness_function.elite.objectives[1],4), ', size:', len(self.fitness_function.elite), ', n_trees:', self.fitness_function.elite.number_of_trees())
 
-		pd.DataFrame(output_data).to_csv(os.path.join(self.path, str(self.output_file_name)), sep=',', header=True, index=False)
-		compress_pickle(os.path.join(self.path, str(self.pareto_file_name)), all_pareto_fronts)
+		if self.save_output:
+			pd.DataFrame(output_data).to_csv(os.path.join(self.path, str(self.output_file_name)), sep=',', header=True, index=False)
+			compress_pickle(os.path.join(self.path, str(self.pareto_file_name)), all_pareto_fronts)
 
 	def FastNonDominatedSorting(self, population):
 		rank_counter = 0

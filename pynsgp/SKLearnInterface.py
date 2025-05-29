@@ -45,7 +45,8 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		alpha=0.01,
 		n_iter=100,
 		l1_ratio=0.9,
-		normalize=False
+		normalize=False,
+		save_output=False,
 		):
 
 		self.largest_value = 1e+8
@@ -123,7 +124,8 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 			verbose=self.verbose,
 			partition_features=self.partition_features,
 			min_trees_init=self.min_trees_init,
-			max_trees_init=self.max_trees_init
+			max_trees_init=self.max_trees_init,
+			save_output=self.save_output,
 		)
 
 		nsgp.Run()

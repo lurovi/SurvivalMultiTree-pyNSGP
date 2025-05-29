@@ -1,5 +1,6 @@
 import os
 import traceback
+import cProfile
 from typing import Any
 
 from genepro.variation import (
@@ -10,6 +11,8 @@ from genepro.variation import (
     coeff_mutation,
 )
 import warnings
+import zlib
+import threading
 import yaml
 from argparse import ArgumentParser, Namespace
 
@@ -22,26 +25,27 @@ warnings.filterwarnings("ignore", category=ConvergenceWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 from methods import run_evolution, run_cox_net, run_survival_ensemble_tree
+from pynsgp.Utils.string_utils import is_valid_filename
+
+completed_csv_lock = threading.Lock()
 
 
-if __name__ == '__main__':
+def main():
+
+    # ========================================================================================================================================
+    # PARSING ARGUMENTS FROM COMMAND-LINE
+    # ========================================================================================================================================
+
     arg_parser: ArgumentParser = ArgumentParser(description="SurvivalMultiTree-pyNSGP arguments.")
-    arg_parser.add_argument("--method", type=str,
-                           help=f"The method name.")
-    arg_parser.add_argument("--seed", type=int,
-                           help=f"The random seed.")
-    arg_parser.add_argument("--dataset", type=str,
-                            help=f"The dataset name.")
-    arg_parser.add_argument("--normalize", type=int,
-                            help=f"Whether or not normalize data when passing it to coxnet.")
-    arg_parser.add_argument("--test_size", type=float,
-                           help="Percentage of the dataset to use as test set.")
-    arg_parser.add_argument("--config", type=str,
-                           help="Path to the .yaml configuration file with the method specific parameters.")
-    arg_parser.add_argument("--run_id", type=int,
-                            help="The run id, used for logging purposes of successful runs. By default is 0.")
-    arg_parser.add_argument("--verbose", type=int,
-                            help="Whether or not print progress for each generation/iteration.")
+    arg_parser.add_argument("--method", type=str, help=f"The method name.")
+    arg_parser.add_argument("--seed", type=int, help=f"The random seed.")
+    arg_parser.add_argument("--dataset", type=str, help=f"The dataset name.")
+    arg_parser.add_argument("--normalize", type=int, help=f"Whether or not normalize data when passing it to coxnet.")
+    arg_parser.add_argument("--test_size", type=float, help="Percentage of the dataset to use as test set.")
+    arg_parser.add_argument("--config", type=str, help="Path to the .yaml configuration file with the method specific parameters.")
+    arg_parser.add_argument("--run_id", type=str, default='default', help="The run id, used for logging purposes of successful runs.")
+    arg_parser.add_argument("--verbose", required=False, action="store_true", help="Verbose flag.")
+    arg_parser.add_argument("--profile", required=False, action="store_true", help="Whether to run and log profiling of code or not.")
 
     cmd_args: Namespace = arg_parser.parse_args()
 
@@ -58,14 +62,14 @@ if __name__ == '__main__':
     if cmd_args.config is None:
         raise AttributeError(f'Configuration .yaml file not provided.')
     if cmd_args.run_id is None:
-        run_id: int = 0
+        run_id: str = 'default'
     else:
-        run_id: int = cmd_args.run_id
-    if cmd_args.verbose is None:
-        verbose: bool = False
-    else:
-        verbose: bool = True if cmd_args.verbose != 0 else False
+        run_id: str = cmd_args.run_id
 
+    # ========================================================================================================================================
+    # EVENTUALLY CREATING RESULTS AND EXCEPTIONS DIRECTORIES
+    # ========================================================================================================================================
+    
     results_path: str = 'results/'
     run_with_exceptions_path: str = 'run_with_exceptions/'
 
@@ -74,6 +78,10 @@ if __name__ == '__main__':
 
     if not os.path.isdir(run_with_exceptions_path):
         os.makedirs(run_with_exceptions_path, exist_ok=True)
+
+    # ========================================================================================================================================
+    # SETTING GENERAL METHOD-INDEPENDENT PARAMETERS
+    # ========================================================================================================================================
 
     corr_drop_threshold: float = 0.98
     scale_numerical: bool = True
@@ -85,15 +93,32 @@ if __name__ == '__main__':
     test_size: float = cmd_args.test_size
     config_file_with_params: str = cmd_args.config
 
-    with open(config_file_with_params, 'r') as yaml_file:
-        try:
-            config_dict: dict[str, Any] = yaml.safe_load(yaml_file)
-        except yaml.YAMLError as exc:
-            raise exc
+    verbose: int = int(cmd_args.verbose)
+    profiling: int = int(cmd_args.profile)
 
-    run_string_descr: str = ','.join([method, str(random_state), dataset_name, str(int(normalize)), str(test_size), config_file_with_params, str(run_id), str(int(verbose))])
+    args_string = ";".join(f"{key};{vars(cmd_args)[key]}" for key in sorted(list(vars(cmd_args).keys())) if key not in ('profile', 'verbose'))
+    all_items_string = ";".join(f"{key}={value}" for key, value in vars(cmd_args).items())
+
+    # ========================================================================================================================================
+    # EXECUTING SELECTED METHOD (EVENTUAL EXCEPTIONS ARE CAPTURED AND LOGGED TO THE EXCEPTIONS FOLDER, RESULTS ARE SAVED IN THE RESULTS DIRECTORY)
+    # ========================================================================================================================================
+
+    pr = None
+    if profiling != 0:
+        pr = cProfile.Profile()
+        pr.enable()
 
     try:
+        if not is_valid_filename(run_id):
+            raise ValueError(f'run_id {run_id} is not a valid filename.')
+
+        if random_state < 1:
+            raise AttributeError(f'seed does not start from 1, it is {random_state}.')
+
+        with open(config_file_with_params, 'r') as yaml_file:
+            config_dict: dict[str, Any] = yaml.safe_load(yaml_file) # Loading .YAML configuration file containing method-specific parameters
+
+        # SURVIVAL MULTI-TREE NSGP
         if method == 'nsgp':
 
             pop_size: int = config_dict['pop_size']
@@ -149,9 +174,11 @@ if __name__ == '__main__':
                 alpha=alpha,
                 l1_ratio=l1_ratio_nsgp,
                 max_iter=max_iter_nsgp,
-                verbose=verbose
+                verbose=verbose,
+                save_output=True,
             )
 
+        # ELASTIC COXNET
         elif method == 'coxnet':
 
             l1_ratio: float = config_dict['l1_ratio']
@@ -174,6 +201,7 @@ if __name__ == '__main__':
                 verbose=verbose
             )
 
+        # SURVIVAL TREE WITH BLACK-BOX ENSEMBLE METHODS
         elif method in ('survivaltree', 'gradientboost', 'randomforest'):
 
             n_max_depths: int = config_dict['n_max_depths']
@@ -196,12 +224,29 @@ if __name__ == '__main__':
         else:
             raise AttributeError(f'Unrecognized method in main {method}.')
 
-        with open(os.path.join(results_path, f'completed_run{run_id}.txt'), 'a+') as terminal_std_out:
-            terminal_std_out.write(run_string_descr)
-            terminal_std_out.write('\n')
-        print(f'Completed run: {run_string_descr}.')
+        # Logging the parameters string of this run if the run was successful
+        with completed_csv_lock:
+            with open(os.path.join(results_path, f'completed_{run_id}.txt'), 'a+') as terminal_std_out:
+                terminal_std_out.write(args_string)
+                terminal_std_out.write('\n')
+        print(f'Completed run: {all_items_string}.')
     except Exception as e:
-        error_string = str(traceback.format_exc())
-        with open(os.path.join(run_with_exceptions_path, f'{run_string_descr.replace(",", "___")}'), 'w') as f:
-            f.write(error_string)
-        print(f'Exception in run: {run_string_descr}.\n{str(e)}')
+        # Capturing the trace of the exception if an exception was raised
+        try:
+            error_string = str(traceback.format_exc())
+            with open(os.path.join(run_with_exceptions_path, f'error_{zlib.adler32(bytes(args_string, "utf-8"))}.txt'), 'w') as f:
+                f.write(all_items_string + '\n\n' + error_string)
+            print(f'\nException in run: {all_items_string}.\n\n{str(e)}\n\n')
+        except Exception as ee:
+            with open(os.path.join(run_with_exceptions_path, 'error_in_error.txt'), 'w') as f:
+                f.write(str(traceback.format_exc()) + '\n\n')
+            print(str(ee))
+        
+    if profiling != 0:
+        pr.disable()
+        pr.print_stats(sort='tottime')
+
+
+if __name__ == '__main__':
+    main()
+

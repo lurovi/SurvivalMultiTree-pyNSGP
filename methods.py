@@ -71,7 +71,7 @@ def load_preprocess_data(
         random_state,
         dataset_name,
         test_size,
-        square = True
+        square=True
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     X, y = load_dataset(dataset_name=dataset_name)
     X, y = simple_basic_cast_and_nan_drop(X, y)
@@ -86,22 +86,6 @@ def load_preprocess_data(
         stratify=[y_i[0] for y_i in y],
         random_state=random_state
     )
-
-    #X_train, y_train, col_transformer = preproc_dataset(
-    #    X_train,
-    #    y_train,
-    #    name=dataset_name,
-    #    drop_corr_threhsold=corr_drop_threshold,
-    #    scale_numerical=scale_numerical
-    #)
-
-    #X_test, y_test, _ = preproc_dataset(
-    #    X_test,
-    #    y_test,
-    #    col_transformer=col_transformer,
-    #    name=dataset_name,
-    #    scale_numerical=scale_numerical
-    #)
 
     X_train, y_train, col_transformer = simple_onehot(X_train, y_train)
     X_test, y_test, _ = simple_onehot(X_test, y_test, col_transformer)
@@ -453,8 +437,9 @@ def run_evolution(
         alpha,
         l1_ratio,
         max_iter,
-        verbose
-) -> None:
+        verbose,
+        save_output
+) -> NSGP:
     final_path = nsgp_path_string(
         base_path=results_path,
         method='nsgp',
@@ -473,7 +458,7 @@ def run_evolution(
         l1_ratio=l1_ratio,
         max_iter=max_iter
     )
-    if not os.path.isdir(final_path):
+    if save_output and not os.path.isdir(final_path):
         os.makedirs(final_path, exist_ok=True)
 
     pareto_file_name: str = f'pareto_seed{random_state}'
@@ -523,10 +508,14 @@ def run_evolution(
         alpha=alpha,
         n_iter=max_iter,
         l1_ratio=l1_ratio,
-        normalize=normalize
+        normalize=normalize,
+        save_output=save_output
     )
     nsgp.fit(X_train, y_train)
 
     if verbose:
         # Obtain the front of non-dominated solutions (according to the training set)
         print(str(nsgp))
+    
+    return nsgp
+
