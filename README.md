@@ -21,6 +21,8 @@ cd SurvivalMultiTree-pyNSGP
 pip3 install -U .
 ```
 
+**Mind that the folders 'results', 'run_with_exceptions', and 'slurm' are ignored by git (they are in the first lines of the .gitignore file).**
+
 # Run
 
 Place yourself with the terminal within the folder 'SurvivalMultiTree-pyNSGP'.
