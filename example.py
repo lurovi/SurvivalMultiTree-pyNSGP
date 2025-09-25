@@ -1,5 +1,5 @@
 from pynsgp.SKLearnInterface import pyNSGPEstimator as NSGP
-from genepro.node_impl import *
+from genepro.node_impl import Plus, Minus, Times, AnalyticQuotient, Square, Log
 from genepro.variation import (
     safe_subtree_crossover,
     node_level_crossover,
@@ -57,8 +57,6 @@ def example():
         path='results/', # Ignored if save_output is False
         pareto_file_name='pareto', # Ignored if save_output is False
         output_file_name='best.csv', # Ignored if save_output is False
-        X_train=X_train,
-        y_train=y_train,
         X_test=X_test,
         y_test=y_test,
         crossovers=crossovers,
@@ -90,7 +88,7 @@ def example():
         normalize=True,
         save_output=False
     )
-    nsgp.fit(X_train, y_train) # It actually uses the X_train and y_train you pass in the constructor
+    nsgp.fit(X_train, y_train)
     
     output = nsgp.nsgp_
     best_front = sorted(output.latest_front, key=lambda x: -x.objectives[0])

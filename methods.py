@@ -10,7 +10,7 @@ from pynsgp.Utils.pickle_persist import compress_pickle, compress_dill
 from pynsgp.Utils.data import load_dataset, cox_net_path_string, nsgp_path_string, simple_onehot, \
     simple_basic_cast_and_nan_drop, SimpleStdScalerOneHot, survival_ensemble_tree_path_string
 from sklearn.model_selection import train_test_split
-from genepro.node_impl import *
+from genepro.node_impl import Plus, Minus, Times, AnalyticQuotient, Square, Log
 from sksurv.linear_model import CoxnetSurvivalAnalysis
 from sksurv.tree import SurvivalTree
 from sksurv.ensemble import GradientBoostingSurvivalAnalysis, RandomSurvivalForest
@@ -478,8 +478,6 @@ def run_evolution(
         path=final_path,
         pareto_file_name=pareto_file_name,
         output_file_name=output_file_name,
-        X_train=X_train,
-        y_train=y_train,
         X_test=X_test,
         y_test=y_test,
         crossovers=crossovers,

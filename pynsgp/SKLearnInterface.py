@@ -3,7 +3,7 @@ from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 import inspect
 
-from genepro.node_impl import *
+from genepro.node_impl import Plus, Minus, Times, Div, InstantiableConstant, OOHRdyFeature
 
 from pynsgp.Fitness.FitnessFunction import SurvivalRegressionFitness
 from pynsgp.Evolution.Evolution import pyNSGP
@@ -15,8 +15,6 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 		path,
 		pareto_file_name,
 		output_file_name,
-		X_train,
-		y_train,
 		X_test,
 		y_test,
 		crossovers,
@@ -60,7 +58,7 @@ class pyNSGPEstimator(BaseEstimator, RegressorMixin):
 	def fit(self, X, y):
 
 		# Check that X and y have correct shape
-		X_train, y_train = check_X_y(self.X_train, self.y_train)
+		X_train, y_train = check_X_y(X, y)
 		self.X_ = X_train
 		self.y_ = y_train
 
